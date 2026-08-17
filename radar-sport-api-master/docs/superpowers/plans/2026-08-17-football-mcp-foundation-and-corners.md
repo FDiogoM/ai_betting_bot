@@ -175,6 +175,26 @@ test('quota headers are captured', async () => {
   assert.strictEqual(quota.remaining, 87);
 });
 
+test('a remaining quota of zero is reported as 0, not null', async () => {
+  nock(BASE).get('/status').reply(200, { errors: [], response: [] }, {
+    'x-ratelimit-requests-limit': '100',
+    'x-ratelimit-requests-remaining': '0'
+  });
+
+  const { quota } = await http.request('/status');
+
+  assert.strictEqual(quota.remaining, 0, 'exhaustion must not be reported as unknown');
+});
+
+test('absent quota headers read as null', async () => {
+  nock(BASE).get('/status').reply(200, { errors: [], response: [] });
+
+  const { quota } = await http.request('/status');
+
+  assert.strictEqual(quota.limit, null);
+  assert.strictEqual(quota.remaining, null);
+});
+
 test('a 200 carrying an errors object is treated as failure, not success', async () => {
   nock(BASE).get('/status').reply(200, { errors: { token: 'invalid key' }, response: [] });
 
@@ -287,6 +307,15 @@ function describeErrors(errors) {
   return String(errors);
 }
 
+// `Number(x) || null` would turn a genuine remaining-quota of 0 into null,
+// hiding exactly the exhaustion the caller needs to see.
+function numericHeader(headers, name) {
+  const raw = headers[name];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 function classify(err, path) {
   if (err instanceof ApiError) return err;
 
@@ -332,8 +361,8 @@ async function request(path, params = {}) {
   return {
     data: (res.data && res.data.response) || [],
     quota: {
-      limit: Number(res.headers['x-ratelimit-requests-limit']) || null,
-      remaining: Number(res.headers['x-ratelimit-requests-remaining']) || null
+      limit: numericHeader(res.headers, 'x-ratelimit-requests-limit'),
+      remaining: numericHeader(res.headers, 'x-ratelimit-requests-remaining')
     }
   };
 }
@@ -383,7 +412,7 @@ module.exports = { ok, fail, empty, run };
 cd radar-sport-api-master/mcp-server && npm test
 ```
 
-Expected: PASS, 9/9.
+Expected: PASS, 11/11.
 
 - [ ] **Step 7: Commit**
 
@@ -631,7 +660,7 @@ module.exports = { read, record, maxRequestsPerCall };
 cd radar-sport-api-master/mcp-server && npm test
 ```
 
-Expected: PASS, 18/18 (9 from Task 1, 9 here).
+Expected: PASS, 20/20 (11 from Task 1, 9 here).
 
 - [ ] **Step 6: Commit**
 
@@ -910,7 +939,7 @@ module.exports = { register };
 cd radar-sport-api-master/mcp-server && npm test
 ```
 
-Expected: PASS, 25/25.
+Expected: PASS, 27/27.
 
 - [ ] **Step 6: Write the server entry point**
 
@@ -1253,7 +1282,7 @@ fixtures.register(server);
 cd radar-sport-api-master/mcp-server && npm test
 ```
 
-Expected: PASS, 33/33.
+Expected: PASS, 35/35.
 
 - [ ] **Step 7: Commit**
 
@@ -1657,7 +1686,7 @@ stats.register(server);
 cd radar-sport-api-master/mcp-server && npm test
 ```
 
-Expected: PASS, 41/41.
+Expected: PASS, 43/43.
 
 - [ ] **Step 6: Commit**
 
@@ -1807,7 +1836,7 @@ Create `mcp-server/README.md` covering: what the server does and its non-goals (
 cd radar-sport-api-master/mcp-server && npm test
 ```
 
-Expected: PASS, 41/41.
+Expected: PASS, 43/43.
 
 - [ ] **Step 7: Commit**
 
@@ -1820,7 +1849,7 @@ git commit -m "feat(mcp): add live smoke test, Claude Code registration and docs
 
 ## Done criteria
 
-- `npm test` passes 41/41 with no API key and no network access.
+- `npm test` passes 43/43 with no API key and no network access.
 - The server completes an MCP handshake and lists eleven tools.
 - `get_team_corner_profile` returns a real corner breakdown against the live API.
 - The corner-availability question is answered with evidence from the smoke test.
