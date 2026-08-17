@@ -117,15 +117,32 @@ test('the profile refuses to exceed the per-call request ceiling', async () => {
 
 test('cached statistics do not count toward the ceiling', async () => {
   nock(BASE).get('/fixtures/statistics').query({ fixture: '1' }).reply(200, statsFor(33, 34, 7, 3));
+  nock(BASE).get('/fixtures/statistics').query({ fixture: '2' }).reply(200, statsFor(35, 33, 4, 6));
   await handlers().get('get_fixture_statistics').handler({ fixtureId: 1 });
+  await handlers().get('get_fixture_statistics').handler({ fixtureId: 2 });
 
   process.env.MCP_MAX_REQUESTS_PER_CALL = '1';
+  nock(BASE).get('/fixtures').query({ team: '33', last: '2' })
+    .reply(200, { errors: [], response: [finishedFixture(1, 33, 34), finishedFixture(2, 35, 33)] });
+
+  const result = await handlers().get('get_team_corner_profile').handler({ teamId: 33, matchCount: 2 });
+
+  assert.ok(!result.isError, 'a fully cached profile must not be blocked by the ceiling');
+  const body = JSON.parse(result.content[0].text);
+  assert.strictEqual(body.matchesAnalyzed, 2, 'both matches should be analyzed when cached');
+});
+
+test('an empty string corner value is treated as missing, never as zero', async () => {
   nock(BASE).get('/fixtures').query({ team: '33', last: '1' })
     .reply(200, { errors: [], response: [finishedFixture(1, 33, 34)] });
+  nock(BASE).get('/fixtures/statistics').query({ fixture: '1' }).reply(200, statsFor(33, 34, '', 3));
 
   const result = await handlers().get('get_team_corner_profile').handler({ teamId: 33, matchCount: 1 });
 
-  assert.ok(!result.isError, 'a fully cached profile must not be blocked by the ceiling');
+  const body = JSON.parse(result.content[0].text);
+  assert.strictEqual(body.matchesAnalyzed, 0, 'a match with empty string corners cannot be analyzed');
+  assert.strictEqual(body.failures.length, 1);
+  assert.match(body.failures[0].reason, /no corner/i);
 });
 
 test('matchCount above the hard cap is rejected by the schema', () => {

@@ -31,7 +31,7 @@ function cornerValue(entries, teamId) {
   const stat = forTeam.statistics.find((s) => s.type === CORNER_TYPE);
   // null means the statistic was not recorded. Coercing it to 0 would corrupt
   // every average computed from it.
-  if (!stat || stat.value === null || stat.value === undefined) return null;
+  if (!stat || stat.value === null || stat.value === undefined || stat.value === '') return null;
   const n = Number(stat.value);
   return Number.isFinite(n) ? n : null;
 }
@@ -88,7 +88,7 @@ function register(server) {
       title: 'Get a team\'s corner profile',
       description: 'Corner analysis across a team\'s recent finished matches. Fetches the '
         + 'fixtures and each one\'s statistics, returning corners for and against per match '
-        + 'plus totals and averages. This is the tool for corner markets. It costs roughly one '
+        + 'plus totals and averages. This is the tool for corner analysis. It costs roughly one '
         + 'request per uncached match, so check get_api_status first when the quota is tight.',
       inputSchema: {
         teamId: z.number().int().positive().describe('Team ID from search_teams.'),
@@ -97,87 +97,88 @@ function register(server) {
         forceRefresh
       }
     },
-    async ({ teamId, matchCount = DEFAULT_MATCH_COUNT, forceRefresh }) => {
-      let fixtures;
-      try {
-        fixtures = await provider.fetch(provider.ENDPOINTS.FIXTURES,
-          { team: teamId, last: matchCount }, cache.TTL.LIVE, forceRefresh);
-      } catch (err) {
-        return fail(`get_team_corner_profile(${teamId}) failed fetching fixtures: ${err.message}`);
-      }
-
-      const finished = fixtures.filter(provider.isFinished);
-      if (!finished.length) {
-        return ok({ teamId, matchesAnalyzed: 0, matches: [], failures: [],
-          note: 'No finished matches found for this team.' });
-      }
-
-      // Count only what would actually hit the network; a warm cache is free.
-      const ceiling = quota.maxRequestsPerCall();
-      const needed = forceRefresh
-        ? finished.length
-        : finished.filter((f) => cache.read(provider.ENDPOINTS.FIXTURE_STATISTICS,
-            statisticsParams(f.fixture.id)) === null).length;
-      if (needed > ceiling) {
-        return fail(`get_team_corner_profile(${teamId}) would need ${needed} requests, above the `
-          + `per-call ceiling of ${ceiling}. Lower matchCount, or raise MCP_MAX_REQUESTS_PER_CALL.`);
-      }
-
-      const matches = [];
-      const failures = [];
-
-      await mapWithConcurrency(finished, CONCURRENCY, async (fixture) => {
-        const id = fixture.fixture.id;
-        const isHome = fixture.teams.home.id === teamId;
-        const opponent = isHome ? fixture.teams.away : fixture.teams.home;
-
-        let entries;
+    async ({ teamId, matchCount = DEFAULT_MATCH_COUNT, forceRefresh }) =>
+      run(`get_team_corner_profile(${teamId})`, async () => {
+        let fixtures;
         try {
-          entries = await fetchStatistics(id, forceRefresh);
+          fixtures = await provider.fetch(provider.ENDPOINTS.FIXTURES,
+            { team: teamId, last: matchCount }, cache.TTL.LIVE, forceRefresh);
         } catch (err) {
-          failures.push({ fixtureId: id, reason: err.message });
-          return;
+          throw err;
         }
 
-        const cornersFor = cornerValue(entries, teamId);
-        const cornersAgainst = cornerValue(entries, opponent.id);
-        if (cornersFor === null || cornersAgainst === null) {
-          failures.push({ fixtureId: id, reason: 'no corner statistics recorded for this match' });
-          return;
+        const finished = fixtures.filter(provider.isFinished);
+        if (!finished.length) {
+          return { teamId, matchesAnalyzed: 0, matches: [], failures: [],
+            note: 'No finished matches found for this team.' };
         }
 
-        matches.push({
-          fixtureId: id,
-          date: fixture.fixture.date,
-          opponent: opponent.name,
-          venue: isHome ? 'home' : 'away',
-          cornersFor,
-          cornersAgainst
+        // Count only what would actually hit the network; a warm cache is free.
+        const ceiling = quota.maxRequestsPerCall();
+        const needed = forceRefresh
+          ? finished.length
+          : finished.filter((f) => cache.read(provider.ENDPOINTS.FIXTURE_STATISTICS,
+              statisticsParams(f.fixture.id)) === null).length;
+        if (needed > ceiling) {
+          throw new Error(`would need ${needed} requests, above the `
+            + `per-call ceiling of ${ceiling}. Lower matchCount, or raise MCP_MAX_REQUESTS_PER_CALL.`);
+        }
+
+        const matches = [];
+        const failures = [];
+
+        await mapWithConcurrency(finished, CONCURRENCY, async (fixture) => {
+          const id = fixture.fixture.id;
+          const isHome = fixture.teams.home.id === teamId;
+          const opponent = isHome ? fixture.teams.away : fixture.teams.home;
+
+          let entries;
+          try {
+            entries = await fetchStatistics(id, forceRefresh);
+          } catch (err) {
+            failures.push({ fixtureId: id, reason: err.message });
+            return;
+          }
+
+          const cornersFor = cornerValue(entries, teamId);
+          const cornersAgainst = cornerValue(entries, opponent.id);
+          if (cornersFor === null || cornersAgainst === null) {
+            failures.push({ fixtureId: id, reason: 'no corner statistics recorded for this match' });
+            return;
+          }
+
+          matches.push({
+            fixtureId: id,
+            date: fixture.fixture.date,
+            opponent: opponent.name,
+            venue: isHome ? 'home' : 'away',
+            cornersFor,
+            cornersAgainst
+          });
         });
-      });
 
-      matches.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+        matches.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
-      const totals = matches.reduce((acc, m) => ({
-        cornersFor: acc.cornersFor + m.cornersFor,
-        cornersAgainst: acc.cornersAgainst + m.cornersAgainst
-      }), { cornersFor: 0, cornersAgainst: 0 });
+        const totals = matches.reduce((acc, m) => ({
+          cornersFor: acc.cornersFor + m.cornersFor,
+          cornersAgainst: acc.cornersAgainst + m.cornersAgainst
+        }), { cornersFor: 0, cornersAgainst: 0 });
 
-      const round = (n) => Math.round(n * 100) / 100;
+        const round = (n) => Math.round(n * 100) / 100;
 
-      return ok({
-        teamId,
-        matchesAnalyzed: matches.length,
-        matches,
-        totals,
-        averages: matches.length ? {
-          cornersFor: round(totals.cornersFor / matches.length),
-          cornersAgainst: round(totals.cornersAgainst / matches.length),
-          totalCorners: round((totals.cornersFor + totals.cornersAgainst) / matches.length)
-        } : null,
-        failures
-      });
-    }
+        return {
+          teamId,
+          matchesAnalyzed: matches.length,
+          matches,
+          totals,
+          averages: matches.length ? {
+            cornersFor: round(totals.cornersFor / matches.length),
+            cornersAgainst: round(totals.cornersAgainst / matches.length),
+            totalCorners: round((totals.cornersFor + totals.cornersAgainst) / matches.length)
+          } : null,
+          failures
+        };
+      })
   );
 }
 
