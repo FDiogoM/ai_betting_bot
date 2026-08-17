@@ -93,11 +93,26 @@ A market is analysable only when the API carries the statistic that feeds it.
 | Over/under goals | `teams/statistics` → goals for and against, home/away splits | Strong |
 | Both teams to score | Same source plus clean sheets | Strong |
 | 1X2, double chance | Standings, form, head-to-head, home/away splits | Strong |
-| Cards | `fixtures/statistics` → Yellow/Red, plus the fixture's referee | Medium-strong |
+| Cards | `fixtures/statistics` → Yellow/Red | Medium — see *Referee profiling, deferred* |
 | Shots, shots on target | `fixtures/statistics` → Shots on/off Goal | Medium |
 | Asian handicap | Derived from relative strength and expected goals | Medium |
 | First-half goals, HT/FT | `score.halftime` of previous fixtures | Medium |
 | Player markets | `players`, `lineups`, `injuries` | Medium — depends on the probable eleven |
+
+**Scope confirmed 2026-08-17:** all four families are in — result and goals, corners and shots,
+cards and discipline, player markets. The build order below is the sequence, not a shortlist.
+
+### Referee profiling, deferred
+
+Card markets ship on team card rates alone. Referee tendency is a real signal — strict officials
+show close to twice the cards of lenient ones — but the API exposes no referee endpoint. The name
+arrives as free text on the fixture, so a profile means sweeping past fixtures matching that string,
+with inconsistent spellings and no identifier to anchor on. The cost is a fuzzy join; the failure
+mode is a confident number built on the wrong matches.
+
+Cards therefore carry a `caveats` entry stating that no referee adjustment was applied, and the
+ledger will show whether card markets underperform the others enough to justify building it. Owner's
+decision, 2026-08-17: deferred, not abandoned.
 
 ## Baseline tools
 
@@ -354,7 +369,7 @@ contaminated in its first month ruins precisely the measurement that justifies t
 | `minEdge` | 0.03 | Below 3 pp the edge sits inside the baseline's own error, so acting on it is acting on noise |
 | `maxPicks` | 8 per day | A shortlist forces choosing |
 | `stakeFraction` | 0.01 of bank | Fixed fraction, the owner's decision, never the agent's |
-| `matchCount` | 10 matches | Sample against quota |
+| `matchCount` | 14 matches | ~7 per venue, comfortably clear of the four-match fallback, still recent. Raised from 10 once the Pro tier made quota a non-constraint |
 | `runHour` | 09:00 local | Before the owner's day, after odds open |
 
 ## Quota, revisited
@@ -387,9 +402,26 @@ allowance mostly unspent.
 1. **Which leagues?** `config.leagues` cannot be defaulted — it is the throttle on the whole run
    and it depends on what the owner follows. Needed before the first live run, not before
    implementation.
-2. **Which paid plan was purchased?** Determines the re-derived values for
-   `MCP_MAX_REQUESTS_PER_CALL` and `MAX_MATCH_COUNT`. Implementation proceeds with the existing
-   conservative defaults; only the numbers change.
-3. **Does the API's odds coverage include corner totals for the chosen leagues?** Verified with one
-   live `/odds` call during Plan 2, before the baseline is wired to it. If corner lines are absent,
-   the slice still functions on the baseline alone, with no edge calculation and no `marketView`.
+2. **Resolved 2026-08-17: the plan is API-Football Pro — 7,500 requests/day**, active to
+   2026-09-17. No change to `MCP_MAX_REQUESTS_PER_CALL` (25) or `MAX_MATCH_COUNT` (20) is needed:
+   the ceiling is per *call*, one call is one team's profile, and a profile spends at most
+   `matchCount` statistics requests, so 20 is already under 25. The daily total was the real
+   constraint and 7,500 dissolves it — a bulletin analysing 20 fixtures on a cold cache costs about
+   480 requests, 6% of the allowance. `config.matchCount` is raised from 10 to 14 on the strength of
+   it (see *Configuration*).
+3. **Resolved 2026-08-17 by live probe** (`node smoke.js 1575459`, Casa Pia v Benfica, Primeira
+   Liga). Corner coverage is deep. The full-match total over/under market is named exactly
+   **`Corners Over Under`** and is quoted by 10Bet, Bet365, Marathonbet, Unibet and **Pinnacle** —
+   five books, enough for a meaningful consensus median.
+
+   **The probe also caught a defect.** Adjacent markets share the word "corners" but are different
+   bets: `Home Corners Over/Under`, `Away Corners Over/Under`, `Total Corners (3 way)`,
+   `Total Corners (1st Half)`, `Corners 1x2`, `Corners Asian Handicap`, `Corners. Odd/Even`,
+   `Corners. Total (Range)`, `Corners Race To`, `Multicorners` and
+   `Corners. European Handicap`. Loose name matching would pool a per-team 2.5 line and a
+   first-half 4.5 line into the full-match buckets and back the wrong bet. Market matching is
+   therefore anchored to the exact full-match name, with the adjacent variants excluded explicitly.
+
+   Two smaller findings: some books quote whole lines (Pinnacle's `Over 9`, `Over 10`), which the
+   half-integer guard correctly drops; and Pinnacle — the sharpest of the five — quotes this market,
+   so a future refinement could weight it above a plain median. Not built now.
