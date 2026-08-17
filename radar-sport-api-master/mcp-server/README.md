@@ -50,7 +50,7 @@ The daily bulletin procedure is configured via `config/bulletin.json` at the rep
 
 Predictions and settlement records are stored in `ledger/` at the repository root. This directory is git-tracked (not gitignored) because the ledger is the permanent record of the system. The ledger uses monthly JSONL files (e.g., `2026-08.jsonl`) and is append-only — no line is ever rewritten.
 
-The ledger directory path can be overridden with the `MCP_LEDGER_DIR` environment variable; if unset, it defaults to `../ledger` relative to the server's ledger module.
+The ledger directory path is set via the `MCP_LEDGER_DIR` environment variable in `.mcp.json` to ensure it points to the repository-root `ledger/` directory, not a path inside the nested library folder. Do not rely on the unset default, which resolves incorrectly.
 
 ## Daily Bulletin Procedure
 
@@ -65,8 +65,8 @@ Run with `dry-run` argument to validate changes without writing predictions or p
 
 ## System Design Spec
 
-See `docs/superpowers/specs/2026-08-17-betting-analyst-system-design.md` for the full system design and requirements.
+See `radar-sport-api-master/docs/superpowers/specs/2026-08-17-betting-analyst-system-design.md` (from the repository root) for the full system design and requirements.
 
 ## Legacy Library
 
-The nested `radar-sport-api-master/` library (at `../../index.js` relative to this server) is non-functional — every Sportradar S5 endpoint it calls returns 403 Access Denied. This server replaces it with the API-Football provider and does not import from the legacy library.
+The nested `radar-sport-api-master/` library (at `../index.js` relative to this server) is non-functional — every Sportradar S5 endpoint it calls returns 403 Access Denied. This server replaces it with the API-Football provider and does not import from the legacy library.
