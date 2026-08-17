@@ -115,6 +115,10 @@ async function cornerProfile(teamId, matchCount, forceRefresh) {
       matches.push({
         fixtureId: id,
         date: fixture.fixture.date,
+        // The window is the last N matches, not the last N of this season, so
+        // the baseline needs each match's season to report how much of the
+        // sample predates the fixture being priced.
+        season: fixture.league ? fixture.league.season : null,
         opponent: opponent.name,
         venue: isHome ? 'home' : 'away',
         cornersFor,

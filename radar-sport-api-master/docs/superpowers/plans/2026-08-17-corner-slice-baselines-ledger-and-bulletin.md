@@ -822,6 +822,27 @@ git commit -m "refactor(mcp): extract the corner profile into a reusable aggrega
 
 ---
 
+### Task 5b: The cross-season window (inserted 2026-08-17)
+
+Not in the original plan. The spec gained *The cross-season window* after the watchlist was
+resolved, and the resolution exposed the problem: four of the eight leagues had not kicked off, so
+their profiles are built almost entirely on last season's matches. The baseline must report the
+split rather than present a stale figure as current.
+
+- [x] `aggregate/cornerProfile.js` records `season` on every match, read from `fixture.league.season`.
+- [x] `cornerBaseline` takes a fourth argument, `options.currentSeason`, and returns
+  `sampleSeasons: { home: { current, previous }, away: { … } } | null`.
+- [x] A sample crossing the boundary emits a caveat. A sample wholly inside the current season does
+  not. **No `currentSeason` supplied returns `null` and says the mix was not checked** — claiming
+  the sample is current when nobody said what current means would be a fabricated reassurance.
+- [x] The caveat says "not from season X — previous seasons or unrecorded" rather than naming a
+  year: a match whose season was never recorded is unknown, and naming a year it might not be from
+  would be false.
+
+Task 6 supplies `currentSeason` from the fixture being priced.
+
+---
+
 ### Task 6: The `get_corner_baseline` tool
 
 **Files:**

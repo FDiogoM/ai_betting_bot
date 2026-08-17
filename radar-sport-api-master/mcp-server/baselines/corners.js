@@ -27,6 +27,15 @@ function venueMean(matches, venue, pick, label, caveats) {
   return mean(matches.map(pick));
 }
 
+// A profile takes the last N matches regardless of which season they belong to.
+// In August that means a team described almost entirely by last season: a
+// different manager, a sold striker, second-division opposition for a promoted
+// side. Pure code cannot know which season is current, so it must be told.
+function seasonSplit(matches, currentSeason) {
+  const current = matches.filter((m) => m.season === currentSeason).length;
+  return { current, previous: matches.length - current };
+}
+
 function assertHasMatches(profile, label) {
   if (!profile || !Array.isArray(profile.matches) || profile.matches.length === 0) {
     throw new Error(`${label} has no matches to compute a baseline from`);
@@ -43,7 +52,7 @@ function assertHasMatches(profile, label) {
  *     sample: { home: n, away: n, pooled: n },
  *     caveats: string[] }
  */
-function cornerBaseline(homeProfile, awayProfile, lines = DEFAULT_LINES) {
+function cornerBaseline(homeProfile, awayProfile, lines = DEFAULT_LINES, options = {}) {
   assertHasMatches(homeProfile, 'home team');
   assertHasMatches(awayProfile, 'away team');
 
@@ -51,6 +60,30 @@ function cornerBaseline(homeProfile, awayProfile, lines = DEFAULT_LINES) {
     'no league normalisation: team rates are used raw, not adjusted to the league average',
     'equal weighting across matches, with no recency decay'
   ];
+
+  const { currentSeason } = options;
+  let sampleSeasons = null;
+  if (currentSeason === undefined || currentSeason === null) {
+    // Claiming the sample is current when nobody said what "current" is would
+    // be a fabricated reassurance. Unknown is reported as unknown.
+    caveats.push('season mix not checked: no current season was supplied, '
+      + 'so the sample may be drawn from a previous season');
+  } else {
+    sampleSeasons = {
+      home: seasonSplit(homeProfile.matches, currentSeason),
+      away: seasonSplit(awayProfile.matches, currentSeason)
+    };
+    const stale = sampleSeasons.home.previous + sampleSeasons.away.previous;
+    if (stale > 0) {
+      // "not from season X" rather than "from season X-1": a match whose season
+      // was never recorded is unknown, and naming a year it might not be from
+      // would be a fabrication.
+      caveats.push(`sample crosses the season boundary: ${stale} of `
+        + `${homeProfile.matches.length + awayProfile.matches.length} matches are not from `
+        + `season ${currentSeason} — previous seasons or unrecorded — when squads and `
+        + 'managers may have differed');
+    }
+  }
 
   const forCorners = (m) => m.cornersFor;
   const againstCorners = (m) => m.cornersAgainst;
@@ -106,6 +139,7 @@ function cornerBaseline(homeProfile, awayProfile, lines = DEFAULT_LINES) {
       away: awayProfile.matches.length,
       pooled: pooledTotals.length
     },
+    sampleSeasons,
     caveats
   };
 }

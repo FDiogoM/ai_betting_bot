@@ -105,3 +105,51 @@ test('custom lines are honoured', () => {
   assert.strictEqual(b.lines.length, 1);
   assert.strictEqual(b.lines[0].line, 8.5);
 });
+
+// In August a profile is built almost entirely on last season's team: a
+// different manager, a sold striker, second-division opposition for a promoted
+// side. The figures are accurate about a team that no longer exists, so the
+// split is reported rather than buried.
+function seasoned(season, count, venue = 'home') {
+  return Array.from({ length: count }, () => ({ venue, season, cornersFor: 5, cornersAgainst: 5 }));
+}
+
+test('the season split is counted against the fixture\'s own season', () => {
+  const home = profile([...seasoned(2026, 2), ...seasoned(2025, 3)]);
+  const away = profile([...seasoned(2026, 1, 'away'), ...seasoned(2025, 4, 'away')]);
+
+  const b = cornerBaseline(home, away, undefined, { currentSeason: 2026 });
+
+  assert.deepStrictEqual(b.sampleSeasons.home, { current: 2, previous: 3 });
+  assert.deepStrictEqual(b.sampleSeasons.away, { current: 1, previous: 4 });
+});
+
+test('a sample crossing the season boundary is declared', () => {
+  const home = profile([...seasoned(2026, 2), ...seasoned(2025, 3)]);
+
+  const b = cornerBaseline(home, awayProfile(), undefined, { currentSeason: 2026 });
+
+  assert.ok(b.caveats.some((c) => /season/i.test(c) && /2025|previous/i.test(c)),
+    `expected a cross-season caveat, got: ${b.caveats.join(' | ')}`);
+});
+
+test('a sample wholly inside the current season raises no season caveat', () => {
+  const home = profile(seasoned(2026, 5));
+  const away = profile(seasoned(2026, 5, 'away'));
+
+  const b = cornerBaseline(home, away, undefined, { currentSeason: 2026 });
+
+  assert.deepStrictEqual(b.sampleSeasons.home, { current: 5, previous: 0 });
+  assert.ok(!b.caveats.some((c) => /crosses the season/i.test(c)),
+    'a current-season sample must not be flagged as crossing');
+});
+
+// Claiming "all current season" when nobody said what the current season is
+// would be a fabricated reassurance. Unknown is reported as unknown.
+test('without a current season the split is null and says so', () => {
+  const b = cornerBaseline(homeProfile(), awayProfile());
+
+  assert.strictEqual(b.sampleSeasons, null);
+  assert.ok(b.caveats.some((c) => /season/i.test(c) && /not (checked|known)/i.test(c)),
+    `expected an unchecked-season caveat, got: ${b.caveats.join(' | ')}`);
+});
