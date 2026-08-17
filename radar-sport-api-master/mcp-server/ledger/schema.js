@@ -1,6 +1,7 @@
 'use strict';
 
 const { z } = require('zod');
+const markets = require('../markets');
 
 // Beyond this distance from the baseline, the agent must say why. Inside it,
 // the difference is not a disagreement worth explaining.
@@ -8,6 +9,22 @@ const DIVERGENCE_THRESHOLD = 0.03;
 
 const halfLine = z.number().refine((n) => (n * 2) % 2 === 1,
   { message: 'line must be a half-integer such as 9.5; a whole line can push' });
+
+// One variant per market family, discriminated on the family name. Every
+// family today is a totals market — an over/under on a count — so they share
+// this shape. The union is the point: a family with a different shape (1X2 has
+// three selections and no line) arrives as a second builder and a second
+// entry, and every already-recorded prediction still validates unchanged.
+const totalsMarket = (family) => z.object({
+  family: z.literal(family),
+  selection: z.enum(['over', 'under']),
+  line: halfLine
+});
+
+const marketSchema = z.discriminatedUnion('family',
+  markets.FAMILY_NAMES
+    .filter((name) => markets.get(name).shape === 'totals')
+    .map(totalsMarket));
 
 const predictionSchema = z.object({
   fixture: z.object({
@@ -17,11 +34,7 @@ const predictionSchema = z.object({
     away: z.string(),
     kickoff: z.string()
   }),
-  market: z.object({
-    family: z.literal('corners'),
-    selection: z.enum(['over', 'under']),
-    line: halfLine
-  }),
+  market: marketSchema,
   baseline: z.object({
     probability: z.number().gt(0).lt(1),
     empiricalRate: z.number().min(0).max(1),
@@ -64,4 +77,4 @@ function predictionId(value) {
     + `${value.market.selection}${value.market.line}`;
 }
 
-module.exports = { predictionSchema, predictionId, DIVERGENCE_THRESHOLD };
+module.exports = { predictionSchema, predictionId, marketSchema, DIVERGENCE_THRESHOLD };

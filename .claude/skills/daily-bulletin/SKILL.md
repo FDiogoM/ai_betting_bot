@@ -1,12 +1,13 @@
 ---
 name: daily-bulletin
-description: Use when producing the daily betting bulletin - grades yesterday's predictions, computes corner baselines for upcoming fixtures, records judgments against them, and publishes the bulletin artifact
+description: Use when producing the daily betting bulletin - grades yesterday's predictions, computes corner and goals baselines for upcoming fixtures, records judgments against them, and publishes the bulletin artifact
 ---
 
 # Daily Betting Bulletin
 
-Produce one day's bulletin. Follow these steps in order. The order matters:
-grading comes before analysis so today's bulletin opens with yesterday's result.
+Produce one day's bulletin across both market families, **corners** and
+**goals**. Follow these steps in order. The order matters: grading comes before
+analysis so today's bulletin opens with yesterday's result.
 
 Pass `dry-run` as an argument to execute every step WITHOUT calling
 `record_prediction` and WITHOUT publishing. Use it to validate a change to this
@@ -33,9 +34,16 @@ yesterday's. Note `settled`, `stillPending` and any `failures` for the bulletin.
 
 ## Step 3 — Read the record
 
-Call `get_ledger_summary`. This is the performance panel. Carry through: agent
-Brier, baseline Brier, `verdict`, `verdictNote`, P&L in units, `n`, and the
-calibration bands.
+Call `get_ledger_summary` three times: once with no filter for the overall
+picture, then once per family with `market: "corners"` and `market: "goals"`.
+Carry through, for each: agent Brier, baseline Brier, `verdict`, `verdictNote`,
+P&L in units, `n`, and the calibration bands.
+
+The per-family reading is the one that means something. Brier scores are only
+comparable within a family — goals lines sit at probabilities corners lines
+never reach — so an overall number mixing them says less than either half. Each
+family needs its own 30 settled predictions before its verdict stops being
+`insufficient`.
 
 If `verdict` is `baseline-better`, say so plainly at the top of the bulletin.
 That is the finding the whole system exists to surface, and burying it would
@@ -47,10 +55,20 @@ For each entry in `leagues`, call `get_fixtures` with the league, season, and a
 date range covering the next `windowHours` hours. Collect every fixture not yet
 played.
 
-## Step 5 — Compute the baseline
+## Step 5 — Compute the baselines
 
-For each fixture, call `get_corner_baseline` with `matchCount` and `lines` from
-the configuration.
+Two market families are built: **corners** and **goals**. For each fixture,
+call both `get_corner_baseline` and `get_goals_baseline` with `matchCount` from
+the configuration. Pass `lines` from the configuration to the corner baseline;
+let the goals baseline use its own defaults, because the configured corner
+lines (7.5 to 12.5) are meaningless for goals.
+
+The two cost wildly different amounts. A corner baseline needs one request per
+match per team — roughly twenty. A goals baseline needs one request per team,
+because goals are already on the fixture. If the budget from Step 1 is tight,
+cut corner baselines first and keep the goals ones: they are nearly free.
+
+Everything below about caveats and dispersion applies to both.
 
 **Read the `caveats` array.** A baseline built on a fallback venue sample is
 weaker than one that was not, and that belongs in your `confidence`, which
@@ -60,10 +78,18 @@ describes the inputs, not the outcome.
 Poisson model is fitting the sample badly. Say so in your reasoning rather than
 trusting the parametric number silently.
 
+**Read `dispersion.ratio` per family, and expect different things of it.** Goal
+counts sit close to the Poisson assumption, so a goals ratio far from 1 is a
+warning. Corner counts are noisier by nature, so a corner ratio of 0.8 or 1.3
+is ordinary. The same number does not mean the same thing in both.
+
 ## Step 6 — Read the market
 
-For each fixture, call `get_market_probabilities`. A fixture nobody quotes on
-corners cannot be bet: skip it and count it as skipped. A line whose
+For each fixture, call `get_market_probabilities` once per family — with
+`market: "corners"` and again with `market: "goals"`. The tool reads only the
+full-match total; per-team, first-half and handicap variants are deliberately
+excluded because they are different bets. A family nobody quotes on this
+fixture cannot be bet: skip that family and count it as skipped. A line whose
 `consensus` is null is quoted on one side only — its best price is still real,
 but you have no market probability to test yourself against, so treat it as
 weaker evidence.
@@ -95,8 +121,14 @@ with no value is information, not a malfunction.
 
 For each kept selection, call `record_prediction`, copying `baseline` from
 Step 5 and `marketView` from Step 6 for the exact line you are backing. Set
-`stake` in units (at most 1) and `confidence` from the input quality you
-assessed in Step 5.
+`market.family` to `corners` or `goals` — it must match the baseline you
+copied, because it decides how the bet is settled later. Set `stake` in units
+(at most 1) and `confidence` from the input quality you assessed in Step 5.
+
+Never back both families on the same fixture without saying why in each
+reason. They are not independent: a match with more goals tends to have more
+corners, so two picks on one fixture is closer to one double-sized bet than to
+two bets.
 
 Skip this step entirely on a dry run.
 
@@ -111,12 +143,16 @@ one stable link. History lives in the ledger, not in a trail of URLs.
 The page carries, in this order:
 
 1. If `verdict` is `baseline-better`, that finding, at the top, unmissable.
-2. Today's picks. Per pick: fixture and kickoff, market and line, baseline
-   probability, empirical rate, market consensus, best price and bookmaker,
-   YOUR probability, edge, stake, and **your divergence reason in full**. The
-   reason must be visible — it is what makes the judgment auditable.
-3. The performance panel from Step 3: agent Brier against baseline Brier, P&L
-   in units, `n`, and the calibration bands.
+2. Today's picks. Per pick: fixture and kickoff, **market family** and line,
+   baseline probability, empirical rate, market consensus, best price and
+   bookmaker, YOUR probability, edge, stake, and **your divergence reason in
+   full**. The reason must be visible — it is what makes the judgment
+   auditable. The family must be visible too: a reader cannot check a 2.5 line
+   without knowing whether it is goals or corners.
+3. The performance panel from Step 3, **split by family**: agent Brier against
+   baseline Brier, P&L in units, `n`, and the calibration bands, for corners
+   and for goals separately. Report the overall figures too, but do not let
+   them lead — they mix two things that are not comparable.
 4. A footer: fixtures analysed, fixtures skipped and why, grading results from
    Step 2, and the quota reading from Step 1.
 

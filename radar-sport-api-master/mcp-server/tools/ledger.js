@@ -8,13 +8,35 @@ const { run } = require('../result');
 const provider = require('../provider/apiFootball');
 const cache = require('../cache');
 const aggregate = require('../aggregate/cornerProfile');
+const goalsAggregate = require('../aggregate/goalsProfile');
+const markets = require('../markets');
 const scoring = require('../ledger/scoring');
 
 const VOID_STATUSES = new Set(['ABD', 'CANC', 'PST', 'AWD', 'WO']);
 
+// How each family reads its observed total off a finished fixture. Returns
+// null when the number is not recorded — never a zero, because a missing count
+// coerced to zero grades every under as a win.
+//
+// The two differ in cost as well as in source: corners need the per-match
+// statistics endpoint, goals are already on the fixture that was fetched to
+// check the status.
+const OBSERVERS = {
+  corners: async (fixture) => {
+    const entries = await aggregate.fetchStatistics(fixture.fixture.id, false, cache.TTL.PERMANENT);
+    const home = aggregate.cornerValue(entries, fixture.teams.home.id);
+    const away = aggregate.cornerValue(entries, fixture.teams.away.id);
+    return home === null || away === null ? null : home + away;
+  },
+  goals: async (fixture) => {
+    const home = goalsAggregate.goalsOf(fixture.goals ? fixture.goals.home : null);
+    const away = goalsAggregate.goalsOf(fixture.goals ? fixture.goals.away : null);
+    return home === null || away === null ? null : home + away;
+  }
+};
+
 // Settles one prediction, or returns null to leave it pending. Never infers a
-// result: a finished match whose corner statistic is missing is void, because
-// treating a missing number as zero would grade an under as a win.
+// result: a finished match whose count is missing is void, not guessed.
 async function settle(prediction) {
   const found = await provider.fetch(provider.ENDPOINTS.FIXTURES,
     { id: prediction.fixture.id }, cache.TTL.LIVE);
@@ -22,6 +44,9 @@ async function settle(prediction) {
 
   const fixture = found[0];
   const status = fixture.fixture.status.short;
+  const spec = markets.get(prediction.market.family);
+  const observe = OBSERVERS[spec.family];
+  if (!observe) throw new Error(`no settlement rule for market family "${spec.family}"`);
 
   const settlement = {
     type: 'settlement',
@@ -29,27 +54,22 @@ async function settle(prediction) {
     settledAt: new Date().toISOString(),
     fixtureStatus: status
   };
+  const voided = { ...settlement, observed: { [spec.observedKey]: null },
+    outcome: 'void', returnUnits: 0 };
 
-  if (VOID_STATUSES.has(status)) {
-    return { ...settlement, observed: { totalCorners: null }, outcome: 'void', returnUnits: 0 };
-  }
+  if (VOID_STATUSES.has(status)) return voided;
   if (!provider.isFinished(fixture)) return null;
 
-  const entries = await aggregate.fetchStatistics(fixture.fixture.id, false, cache.TTL.PERMANENT);
-  const home = aggregate.cornerValue(entries, fixture.teams.home.id);
-  const away = aggregate.cornerValue(entries, fixture.teams.away.id);
-  if (home === null || away === null) {
-    return { ...settlement, observed: { totalCorners: null }, outcome: 'void', returnUnits: 0 };
-  }
+  const total = await observe(fixture);
+  if (total === null) return voided;
 
-  const total = home + away;
   const cleared = total > prediction.market.line;
   const won = prediction.market.selection === 'over' ? cleared : !cleared;
   const stake = prediction.agent.stake;
 
   return {
     ...settlement,
-    observed: { totalCorners: total },
+    observed: { [spec.observedKey]: total },
     outcome: won ? 'win' : 'loss',
     returnUnits: won
       ? Math.round(stake * (prediction.marketView.bestPrice - 1) * 1e6) / 1e6
@@ -78,9 +98,10 @@ function register(server) {
           kickoff: z.string().describe('ISO kickoff time.')
         }),
         market: z.object({
-          family: z.literal('corners'),
+          family: z.enum(markets.FAMILY_NAMES)
+            .describe(`Market family: ${markets.FAMILY_NAMES.join(' or ')}.`),
           selection: z.enum(['over', 'under']),
-          line: z.number().describe('Half-integer market line, e.g. 9.5.')
+          line: z.number().describe('Half-integer market line, e.g. 9.5 for corners, 2.5 for goals.')
         }),
         baseline: z.object({
           probability: z.number(),
@@ -89,7 +110,8 @@ function register(server) {
           lambda: z.number(),
           dispersionRatio: z.number().nullable(),
           caveats: z.array(z.string())
-        }).describe('Copy this from get_corner_baseline, for the line you are backing.'),
+        }).describe('Copy this from the baseline tool for this family (get_corner_baseline or '
+          + 'get_goals_baseline), for the line you are backing.'),
         marketView: z.object({
           consensusProbability: z.number().nullable(),
           bestPrice: z.number(),
@@ -138,8 +160,8 @@ function register(server) {
       title: 'Grade every prediction whose match has finished',
       description: 'Settles all outstanding predictions, not just yesterday\'s, so a missed run '
         + 'costs a day of picks rather than the record. Idempotent: a prediction that already '
-        + 'carries a settlement is skipped. A finished match with no corner statistic is voided, '
-        + 'never guessed.',
+        + 'carries a settlement is skipped. Handles every market family. A finished match whose '
+        + 'count was never recorded is voided, never guessed.',
       inputSchema: {}
     },
     async () =>
@@ -183,7 +205,9 @@ function register(server) {
         + `${scoring.INSUFFICIENT_N} settled predictions the verdict is "insufficient" rather `
         + 'than a number that looks meaningful.',
       inputSchema: {
-        market: z.string().optional().describe('Restrict to one market family, e.g. "corners".'),
+        market: z.enum(markets.FAMILY_NAMES).optional()
+          .describe('Restrict to one market family. Scores are only comparable within a family, '
+            + `and each needs its own ${scoring.INSUFFICIENT_N} settled predictions.`),
         from: z.string().optional().describe('ISO date; include predictions recorded on or after it.'),
         to: z.string().optional().describe('ISO date; include predictions recorded before it.')
       }

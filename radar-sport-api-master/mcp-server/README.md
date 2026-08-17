@@ -46,10 +46,26 @@ A key already exported in the environment also works and takes precedence over `
 ### Odds Tools (Task 9)
 - `get_odds` — Pre-match odds for one fixture, by bookmaker and market.
 
-### Corner Baseline Tools (Tasks 10–11)
+### Baseline Tools (Tasks 10–11)
 - `get_corner_baseline` — Deterministic corner baseline for one upcoming fixture using Poisson model.
-- `get_market_probabilities` — Market's implied corner probabilities with bookmaker margin removed.
+- `get_goals_baseline` — The same for total goals. Costs one request per team rather than one per match, because goals are already on the fixture.
+- `get_market_probabilities` — Market's implied probabilities for one family (`corners` or `goals`), with the bookmaker margin removed. Reads the full-match total only.
 - `evaluate_bet` — Pure arithmetic on a probability and a price: implied probability, edge, and expected value.
+
+## Market Families
+
+A family is declared once, in `markets/index.js`: its odds market name, where its observed total comes from at settlement, and which lines are standard. Everything downstream reads that declaration — the ledger schema builds one union variant per family, the odds parser takes the family as an argument, and settlement dispatches on it.
+
+| Family | Count source | Cost per baseline | Odds market name |
+|---|---|---|---|
+| `corners` | `fixtures/statistics` → Corner Kicks | ~1 request per match per team | `Corners Over Under` |
+| `goals` | the fixture's own score | 1 request per team | `Goals Over/Under` |
+
+Both market names were read off a real API response, not assumed, and both patterns are anchored: the same response carries `Goals Over/Under First Half`, `Goal Line`, `Home Corners Over/Under` and a dozen other near-misses that are different bets.
+
+Adding a totals family is a registry entry plus its count source. A family with a different shape — 1X2 has three selections and no line — additionally needs a second variant in the schema union and its own settlement rule.
+
+Scores are only comparable **within** a family, and each needs its own 30 settled predictions before `get_ledger_summary` returns a verdict rather than `insufficient`. Pass `market` to score one family.
 
 ### Ledger Tools (Task 12)
 - `record_prediction` — Writes one prediction to the append-only ledger before kickoff.

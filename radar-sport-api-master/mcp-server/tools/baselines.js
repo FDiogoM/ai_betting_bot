@@ -4,9 +4,12 @@ const { z } = require('zod');
 const provider = require('../provider/apiFootball');
 const cache = require('../cache');
 const aggregate = require('../aggregate/cornerProfile');
+const goalsAggregate = require('../aggregate/goalsProfile');
 const { cornerBaseline, DEFAULT_LINES } = require('../baselines/corners');
+const { goalsBaseline } = require('../baselines/goals');
 const devig = require('../baselines/devig');
-const { parseCornerQuotes } = require('../aggregate/cornerOdds');
+const { parseQuotes } = require('../aggregate/marketOdds');
+const markets = require('../markets');
 const { evaluate } = require('../baselines/value');
 const { run } = require('../result');
 
@@ -78,49 +81,49 @@ function summariseLine(quote) {
   };
 }
 
-function register(server) {
+// Both baselines are the same tool with a different count behind them: resolve
+// the fixture, profile each team, run the Poisson, report the profiles beside
+// it. Writing it once means a family cannot drift into a subtly different
+// contract, and the differences that are real — where the count comes from,
+// what it costs, which lines are standard — stay declared rather than implied.
+function registerBaselineTool(server, spec) {
   server.registerTool(
-    'get_corner_baseline',
+    spec.name,
     {
-      title: 'Get the corner baseline for a fixture',
-      description: 'A deterministic corner baseline for one upcoming fixture. Blends each team\'s '
-        + 'corners-for with the opponent\'s corners-against, split by venue, into a Poisson '
-        + 'expectation, and prices every standard line. Returns the empirical rate beside each '
-        + 'parametric probability and declares its own simplifications in `caveats` — read them, '
-        + 'especially `sampleSeasons` early in a season when recent matches may predate it. '
-        + 'This is arithmetic, not a recommendation: it has no view on whether the price is worth '
-        + 'taking.',
+      title: spec.title,
+      description: spec.description,
       inputSchema: {
         fixtureId: z.number().int().positive().describe('Fixture ID of the upcoming match.'),
-        matchCount: z.number().int().min(1).max(aggregate.MAX_MATCH_COUNT)
-          .default(aggregate.DEFAULT_MATCH_COUNT)
-          .describe(`Recent finished matches per team (default ${aggregate.DEFAULT_MATCH_COUNT}, `
-            + `max ${aggregate.MAX_MATCH_COUNT}).`),
+        matchCount: z.number().int().min(1).max(spec.maxMatchCount)
+          .default(spec.defaultMatchCount)
+          .describe(`Recent finished matches per team (default ${spec.defaultMatchCount}, `
+            + `max ${spec.maxMatchCount}).`),
         lines: z.array(z.number()).optional()
-          .describe(`Market lines to price. Defaults to ${DEFAULT_LINES.join(', ')}.`),
+          .describe(`Market lines to price. Defaults to ${spec.defaultLines.join(', ')}.`),
         forceRefresh
       }
     },
     async ({ fixtureId, matchCount, lines, forceRefresh }) =>
-      run(`get_corner_baseline(${fixtureId})`, async () => {
+      run(`${spec.name}(${fixtureId})`, async () => {
         const fixture = await resolveFixture(fixtureId, forceRefresh);
 
-        // Sequential, not parallel: cornerProfile already runs its statistics
-        // fetches at a concurrency of 3, and each checks the per-call ceiling
-        // against a cache the other is still filling.
+        // Sequential, not parallel: a statistics-backed profile already runs
+        // its fetches at a concurrency of 3, and each checks the per-call
+        // ceiling against a cache the other is still filling.
         //
         // Each profile enforces the ceiling for its own team, so a baseline is
         // bounded by twice MCP_MAX_REQUESTS_PER_CALL rather than once. That is
         // still a bound, and a combined pre-count would need an extra fixtures
         // request per team to compute.
-        const homeProfile = await aggregate.cornerProfile(fixture.homeId, matchCount, forceRefresh);
-        const awayProfile = await aggregate.cornerProfile(fixture.awayId, matchCount, forceRefresh);
+        const homeProfile = await spec.profile(fixture.homeId, matchCount, forceRefresh);
+        const awayProfile = await spec.profile(fixture.awayId, matchCount, forceRefresh);
 
-        const baseline = cornerBaseline(homeProfile, awayProfile, lines || DEFAULT_LINES,
+        const baseline = spec.compute(homeProfile, awayProfile, lines || spec.defaultLines,
           { currentSeason: fixture.season });
 
         return {
           fixture,
+          market: spec.family,
           ...baseline,
           profiles: {
             home: { matchesAnalyzed: homeProfile.matchesAnalyzed, averages: homeProfile.averages },
@@ -129,30 +132,77 @@ function register(server) {
         };
       })
   );
+}
+
+function register(server) {
+  registerBaselineTool(server, {
+    name: 'get_corner_baseline',
+    family: 'corners',
+    title: 'Get the corner baseline for a fixture',
+    description: 'A deterministic corner baseline for one upcoming fixture. Blends each team\'s '
+      + 'corners-for with the opponent\'s corners-against, split by venue, into a Poisson '
+      + 'expectation, and prices every standard line. Returns the empirical rate beside each '
+      + 'parametric probability and declares its own simplifications in `caveats` — read them, '
+      + 'especially `sampleSeasons` early in a season when recent matches may predate it. '
+      + 'This is arithmetic, not a recommendation: it has no view on whether the price is worth '
+      + 'taking.',
+    profile: aggregate.cornerProfile,
+    compute: cornerBaseline,
+    defaultLines: DEFAULT_LINES,
+    defaultMatchCount: aggregate.DEFAULT_MATCH_COUNT,
+    maxMatchCount: aggregate.MAX_MATCH_COUNT
+  });
+
+  registerBaselineTool(server, {
+    name: 'get_goals_baseline',
+    family: 'goals',
+    title: 'Get the total-goals baseline for a fixture',
+    description: 'A deterministic total-goals baseline for one upcoming fixture. Same arithmetic '
+      + 'as the corner baseline — each team\'s goals-for blended with the opponent\'s '
+      + 'goals-against, split by venue, into a Poisson expectation — and the same caveats, which '
+      + 'you must read. Two differences worth knowing: goal counts sit closer to the Poisson '
+      + 'assumption than corner counts, so `dispersion.ratio` should usually be nearer 1, and '
+      + 'this costs one request per team rather than one per match because goals are already on '
+      + 'the fixture. Arithmetic, not a recommendation.',
+    profile: goalsAggregate.goalsProfile,
+    compute: goalsBaseline,
+    defaultLines: markets.get('goals').defaultLines,
+    defaultMatchCount: goalsAggregate.DEFAULT_MATCH_COUNT,
+    maxMatchCount: goalsAggregate.MAX_MATCH_COUNT
+  });
 
   server.registerTool(
     'get_market_probabilities',
     {
-      title: 'Get the market\'s implied corner probabilities',
-      description: 'Converts a fixture\'s corner odds into probabilities with the bookmaker '
-        + 'margin removed, per bookmaker and as a consensus median, plus the best available '
-        + 'price on each side. The consensus is the market\'s opinion — compare your own '
-        + 'probability against it. The best price is what determines whether value exists.',
+      title: 'Get the market\'s implied probabilities for a total',
+      description: 'Converts a fixture\'s odds on one market family into probabilities with the '
+        + 'bookmaker margin removed, per bookmaker and as a consensus median, plus the best '
+        + 'available price on each side. The consensus is the market\'s opinion — compare your own '
+        + 'probability against it. The best price is what determines whether value exists. Only '
+        + 'the full-match total is read: per-team, first-half and handicap variants of the same '
+        + 'family are deliberately excluded, because they are different bets.',
       inputSchema: {
         fixtureId: z.number().int().positive().describe('Fixture ID of the upcoming match.'),
+        market: z.enum(markets.FAMILY_NAMES).default('corners')
+          .describe(`Market family: ${markets.FAMILY_NAMES.join(' or ')}.`),
         forceRefresh
       }
     },
-    async ({ fixtureId, forceRefresh }) =>
-      run(`get_market_probabilities(${fixtureId})`, async () => {
+    async ({ fixtureId, market, forceRefresh }) => {
+      // The schema's default only applies to calls that go through it. A direct
+      // caller — a test, or another tool — gets the same corner default here
+      // rather than an "unknown market family undefined".
+      const family = market || 'corners';
+      return run(`get_market_probabilities(${fixtureId}, ${family})`, async () => {
         const odds = await provider.fetch(provider.ENDPOINTS.ODDS,
           { fixture: fixtureId }, cache.TTL.ODDS, forceRefresh);
 
-        const quotes = parseCornerQuotes(odds);
+        const quotes = parseQuotes(family, odds);
         if (!quotes.length) return null; // run() reports this as an explicit empty result
 
-        return { fixtureId, market: 'corners', lines: quotes.map(summariseLine) };
-      })
+        return { fixtureId, market: family, lines: quotes.map(summariseLine) };
+      });
+    }
   );
 
   server.registerTool(
