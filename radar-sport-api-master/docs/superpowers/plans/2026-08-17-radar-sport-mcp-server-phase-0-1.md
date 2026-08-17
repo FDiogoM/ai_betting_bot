@@ -1,5 +1,9 @@
 # Radar Sport MCP Server — Phase 0 & 1 Implementation Plan
 
+> **SUPERSEDED — do not execute.** The Sportradar S5 endpoints this plan targets
+> return `403 Access Denied`; see `docs/superpowers/specs/2026-08-17-football-stats-mcp-server-design.md`
+> for the replacement design and its plan. Retained for the record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Discover which Sportradar S5 endpoints are actually reachable, then ship a working MCP server exposing the confirmed league-level, discovery, and raw-access tools over stdio.

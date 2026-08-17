@@ -1,7 +1,13 @@
 # Radar Sport MCP Server — Design
 
 **Date:** 2026-08-17
-**Status:** Approved for implementation planning
+**Status:** SUPERSEDED — do not implement.
+
+> Superseded on 2026-08-17 by `2026-08-17-football-stats-mcp-server-design.md`.
+> The Sportradar S5 endpoints this design depends on now return `403 Access Denied`
+> on every host and path tested, so the `radar-sport-api` library is not a viable
+> data source. Retained for the architecture, which carried over, and for the
+> record of why the pivot happened.
 
 ## Goal
 
