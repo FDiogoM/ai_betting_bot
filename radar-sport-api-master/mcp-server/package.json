@@ -1,0 +1,20 @@
+{
+  "name": "football-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server exposing football statistics for betting analysis",
+  "main": "server.js",
+  "scripts": {
+    "test": "node --test test/**/*.js",
+    "start": "node server.js",
+    "smoke": "node smoke.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "axios": "^1.6.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "nock": "^14.0.0"
+  }
+}
