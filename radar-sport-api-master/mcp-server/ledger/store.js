@@ -2,11 +2,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const paths = require('../paths');
 
 // The ledger is the record, not a cache: it lives outside .cache/, is
-// git-tracked, and is never cleared.
+// git-tracked, and is never cleared. The default resolves to the repository
+// root on any machine, so MCP_LEDGER_DIR is an override for an unusual layout,
+// not something an install has to set. Tests point it at a temp directory.
 function ledgerDir() {
-  return process.env.MCP_LEDGER_DIR || path.join(__dirname, '..', '..', 'ledger');
+  return process.env.MCP_LEDGER_DIR || paths.LEDGER;
 }
 
 function monthOf(record) {

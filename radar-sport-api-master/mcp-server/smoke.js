@@ -6,6 +6,8 @@
 // Its job is to report which corner markets a bookmaker actually quotes, so the
 // market-name patterns in aggregate/cornerOdds.js are read off a real response
 // rather than guessed.
+require('./env').load(); // same .env the server reads, so the probe needs no shell setup
+
 const provider = require('./provider/apiFootball');
 const cache = require('./cache');
 

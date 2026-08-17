@@ -1,5 +1,10 @@
 'use strict';
 
+// Before anything reads process.env. Nothing below this line may be hoisted
+// above it: http.js resolves the API key lazily, but a future eager reader
+// would silently see an unloaded environment.
+require('./env').load();
+
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 

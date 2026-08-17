@@ -4,8 +4,7 @@
       "command": "node",
       "args": ["radar-sport-api-master/mcp-server/server.js"],
       "env": {
-        "API_FOOTBALL_KEY": "${API_FOOTBALL_KEY}",
-        "MCP_LEDGER_DIR": "C:\\Users\\DiogoMata\\Desktop\\radar-sport-api-master\\ledger"
+        "API_FOOTBALL_KEY": "${API_FOOTBALL_KEY:-}"
       }
     }
   }

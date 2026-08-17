@@ -1,0 +1,13 @@
+# Secrets. The committed template is .env.example.
+.env
+
+node_modules/
+.cache/
+
+# Per-machine tool permissions, not project configuration.
+.claude/settings.local.json
+
+# The published bulletin is a rendering, rewritten every morning. The record
+# it renders lives in ledger/, which is tracked. Keeping this out of git keeps
+# the daily run from leaving a dirty tree behind it.
+bulletin/

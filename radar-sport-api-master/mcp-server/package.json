@@ -5,7 +5,7 @@
   "description": "MCP server exposing read-only football statistics for match analysis",
   "main": "server.js",
   "scripts": {
-    "test": "node --test test/**/*.js",
+    "test": "node --test",
     "start": "node server.js",
     "smoke": "node smoke.js"
   },

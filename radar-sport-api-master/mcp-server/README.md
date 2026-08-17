@@ -2,6 +2,28 @@
 
 An MCP server providing deterministic corner baselines, prediction recording, and ledger analysis for football betting analysis.
 
+## Setup
+
+From the repository root, on a machine with nothing installed:
+
+```
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+
+# macOS / Linux
+sh scripts/setup.sh
+```
+
+The script checks for Node 18+, installs dependencies, creates `.env` from `.env.example`, and runs the test suite. It is safe to re-run and never overwrites an existing `.env`. Then put your API-Football key in `.env`:
+
+```
+API_FOOTBALL_KEY=your-key-here
+```
+
+Restart Claude Code in this folder and approve the `football-stats` server when prompted. `.mcp.json` at the repository root is what registers it; no per-machine editing of that file is needed, because every path in it is relative and the only variable it passes through is the key.
+
+A key already exported in the environment also works and takes precedence over `.env`. Everything else — ledger location, cache location, timeouts — defaults correctly on any machine; see `.env.example` for the overrides.
+
 ## Registered Tools
 
 ### Reference Tools (Task 2)
@@ -36,6 +58,8 @@ An MCP server providing deterministic corner baselines, prediction recording, an
 
 ## Configuration
 
+Secrets and per-machine overrides live in `.env` at the repository root (gitignored; template in `.env.example`). Everything the strategy needs to be reviewable lives in `config/bulletin.json`, which is committed.
+
 The daily bulletin procedure is configured via `config/bulletin.json` at the repository root. This file specifies:
 - `leagues` — The league watchlist (empty by default; fill with `{"id": <leagueId>, "season": <year>, "name": "<label>"}` entries).
 - `windowHours` — Number of hours ahead to look for fixtures.
@@ -50,7 +74,7 @@ The daily bulletin procedure is configured via `config/bulletin.json` at the rep
 
 Predictions and settlement records are stored in `ledger/` at the repository root. This directory is git-tracked (not gitignored) because the ledger is the permanent record of the system. The ledger uses monthly JSONL files (e.g., `2026-08.jsonl`) and is append-only — no line is ever rewritten.
 
-The ledger directory path is set via the `MCP_LEDGER_DIR` environment variable in `.mcp.json` to ensure it points to the repository-root `ledger/` directory, not a path inside the nested library folder. Do not rely on the unset default, which resolves incorrectly.
+The ledger path resolves to the repository-root `ledger/` on any machine, via `paths.js`. `MCP_LEDGER_DIR` overrides it — the test suite points it at a temp directory — but no installation needs to set it.
 
 ## Daily Bulletin Procedure
 
