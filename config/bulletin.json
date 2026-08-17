@@ -1,5 +1,16 @@
 {
-  "leagues": [],
+  "leagues": [
+    { "id": 94, "season": 2026, "name": "Primeira Liga (Portugal)" },
+    { "id": 39, "season": 2026, "name": "Premier League (England)" },
+    { "id": 140, "season": 2026, "name": "La Liga (Spain)" },
+    { "id": 135, "season": 2026, "name": "Serie A (Italy)" },
+    { "id": 71, "season": 2026, "name": "Serie A (Brazil)" },
+    { "id": 78, "season": 2026, "name": "Bundesliga (Germany)" },
+    { "id": 307, "season": 2026, "name": "Pro League (Saudi Arabia)" },
+    { "id": 2, "season": 2026, "name": "UEFA Champions League" },
+    { "id": 3, "season": 2026, "name": "UEFA Europa League" },
+    { "id": 848, "season": 2026, "name": "UEFA Europa Conference League" }
+  ],
   "windowHours": 48,
   "minEdge": 0.03,
   "maxPicks": 8,
