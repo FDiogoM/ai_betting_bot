@@ -126,8 +126,10 @@ git commit -m "chore: add live odds probe and record corner market coverage"
 - Modify: `mcp-server/server.js` (register the new module)
 
 **Interfaces:**
-- Consumes: `provider.fetch`, `provider.ENDPOINTS.ODDS` (added in Task 1), `cache.TTL.ODDS`, `run` from `result.js`
+- Consumes: `provider.fetch`, `provider.ENDPOINTS.ODDS`, `cache.TTL.ODDS`, `run` from `result.js`
 - Produces: the `get_odds` MCP tool, and `register(server)` from `tools/odds.js`
+
+**`ENDPOINTS.ODDS` is added by Task 1 Step 2, but Task 1 is blocked without an API key.** Before Step 1, check whether `provider/apiFootball.js` already has `ODDS: '/odds'` in its `ENDPOINTS` object; if not, add it exactly as Task 1 Step 2 shows. This task does not depend on Task 1 having run.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1026,6 +1028,11 @@ function register(server) {
         // Sequential, not parallel: cornerProfile already runs its statistics
         // fetches at a concurrency of 3, and each checks the per-call ceiling
         // against a cache the other is still filling.
+        //
+        // Each profile enforces the ceiling for its own team, so a baseline is
+        // bounded by twice MCP_MAX_REQUESTS_PER_CALL rather than once. That is
+        // still a bound, and a combined pre-count would need an extra fixtures
+        // request per team to compute.
         const homeProfile = await aggregate.cornerProfile(fixture.homeId, matchCount, forceRefresh);
         const awayProfile = await aggregate.cornerProfile(fixture.awayId, matchCount, forceRefresh);
 
@@ -1358,9 +1365,11 @@ test('get_market_probabilities de-vigs each book and takes a consensus', async (
   assert.strictEqual(line.bookmakers.length, 3);
   assert.strictEqual(line.bestPrice.over.bookmaker, 'B');
   assert.strictEqual(line.bestPrice.over.odd, 2.05);
-  // C prices both sides at 1.90, so its fair probability is exactly 0.5 and it
-  // is the median of the three.
-  assert.strictEqual(line.consensus.overProbability, 0.5);
+  // Fair over probabilities: A (1.95/1.85) = 0.4868, B (2.05/1.78) = 0.4648,
+  // C (1.90/1.90) = 0.5000. Sorted, A is the middle one, so A is the median —
+  // C sits at the top of the range, not in the middle of it.
+  assert.strictEqual(line.consensus.overProbability, 0.4868);
+  assert.strictEqual(line.consensus.underProbability, 0.5132);
   assert.ok(line.overround > 0, 'the raw book must carry a margin');
 });
 
