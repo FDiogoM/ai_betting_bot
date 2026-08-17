@@ -26,6 +26,9 @@ function isFinished(fixture) {
 }
 
 // Cache-first, network-second. Every read goes through here.
+// `ttl` is either a value (number | null) or a function (data) => number | null,
+// so a caller can pick the lifetime from the response — a finished fixture is
+// immutable and cached permanently, a scheduled one must expire quickly.
 async function fetch(endpoint, params = {}, ttl = cache.TTL.LIVE, forceRefresh = false) {
   if (!forceRefresh) {
     const hit = cache.read(endpoint, params);
@@ -34,7 +37,7 @@ async function fetch(endpoint, params = {}, ttl = cache.TTL.LIVE, forceRefresh =
 
   const { data, quota: seen } = await http.request(endpoint, params);
   quota.record(seen);
-  cache.write(endpoint, params, data, ttl);
+  cache.write(endpoint, params, data, typeof ttl === 'function' ? ttl(data) : ttl);
   return data;
 }
 
