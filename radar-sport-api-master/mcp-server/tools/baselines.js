@@ -7,6 +7,7 @@ const aggregate = require('../aggregate/cornerProfile');
 const { cornerBaseline, DEFAULT_LINES } = require('../baselines/corners');
 const devig = require('../baselines/devig');
 const { parseCornerQuotes } = require('../aggregate/cornerOdds');
+const { evaluate } = require('../baselines/value');
 const { run } = require('../result');
 
 const forceRefresh = z.boolean().optional()
@@ -152,6 +153,24 @@ function register(server) {
 
         return { fixtureId, market: 'corners', lines: quotes.map(summariseLine) };
       })
+  );
+
+  server.registerTool(
+    'evaluate_bet',
+    {
+      title: 'Evaluate a bet\'s edge and expected value',
+      description: 'Pure arithmetic on a probability and a price: implied probability, edge over '
+        + 'it, and expected value per unit staked. Use this rather than computing it yourself — '
+        + 'a sign error here corrupts the prediction record. It does not decide stake size.',
+      inputSchema: {
+        probability: z.number().gt(0).lt(1).describe('Your probability for the selection.'),
+        decimalOdd: z.number().gt(1).describe('The decimal price available.'),
+        stakeUnits: z.number().gt(0).max(1).default(1)
+          .describe('Stake in units of the configured bankroll fraction. Never above 1.')
+      }
+    },
+    async ({ probability, decimalOdd, stakeUnits }) =>
+      run('evaluate_bet', async () => evaluate(probability, decimalOdd, stakeUnits))
   );
 }
 
