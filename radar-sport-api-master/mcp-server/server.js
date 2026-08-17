@@ -7,6 +7,7 @@ const reference = require('./tools/reference');
 const fixtures = require('./tools/fixtures');
 const stats = require('./tools/stats');
 const odds = require('./tools/odds');
+const baselines = require('./tools/baselines');
 
 const server = new McpServer({ name: 'football-stats', version: '0.1.0' });
 
@@ -14,6 +15,7 @@ reference.register(server);
 fixtures.register(server);
 stats.register(server);
 odds.register(server);
+baselines.register(server);
 
 async function main() {
   // stdout is the MCP transport. Diagnostics must go to stderr or they

@@ -1057,7 +1057,10 @@ function register(server) {
         const homeProfile = await aggregate.cornerProfile(fixture.homeId, matchCount, forceRefresh);
         const awayProfile = await aggregate.cornerProfile(fixture.awayId, matchCount, forceRefresh);
 
-        const baseline = cornerBaseline(homeProfile, awayProfile, lines || DEFAULT_LINES);
+        // Task 5b: cornerBaseline cannot know which season is current on its
+        // own; the fixture being priced is what supplies it.
+        const baseline = cornerBaseline(homeProfile, awayProfile, lines || DEFAULT_LINES,
+          { currentSeason: fixture.season });
 
         return {
           fixture,
