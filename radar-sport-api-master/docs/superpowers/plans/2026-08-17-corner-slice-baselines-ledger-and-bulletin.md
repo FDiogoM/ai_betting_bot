@@ -1444,10 +1444,13 @@ test('get_market_probabilities de-vigs each book and takes a consensus', async (
 });
 
 test('a line quoted by only one side is reported without a de-vigged consensus', async () => {
+  // Named to match the anchored full-match-total pattern (Task 1 finding),
+  // unlike the plan's original fixture, which used the non-matching 'Total
+  // Corners' and so tested a market the parser was never meant to accept.
   nock(BASE).get('/odds').query({ fixture: '500' }).reply(200, oddsBody([{
     id: 1,
     name: 'A',
-    bets: [{ name: 'Total Corners', values: [{ value: 'Over 9.5', odd: '1.95' }] }]
+    bets: [{ name: 'Corners Over Under', values: [{ value: 'Over 9.5', odd: '1.95' }] }]
   }]));
 
   const result = await handlers().get('get_market_probabilities').handler({ fixtureId: 500 });
