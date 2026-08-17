@@ -1,0 +1,22 @@
+'use strict';
+
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
+const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
+
+const reference = require('./tools/reference');
+
+const server = new McpServer({ name: 'football-stats', version: '0.1.0' });
+
+reference.register(server);
+
+async function main() {
+  // stdout is the MCP transport. Diagnostics must go to stderr or they
+  // corrupt the protocol stream.
+  await server.connect(new StdioServerTransport());
+  console.error('football-stats MCP server ready on stdio');
+}
+
+main().catch((err) => {
+  console.error('fatal:', err);
+  process.exit(1);
+});
