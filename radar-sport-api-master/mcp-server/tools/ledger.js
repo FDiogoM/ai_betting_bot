@@ -8,6 +8,7 @@ const { run } = require('../result');
 const provider = require('../provider/apiFootball');
 const cache = require('../cache');
 const aggregate = require('../aggregate/cornerProfile');
+const scoring = require('../ledger/scoring');
 
 const VOID_STATUSES = new Set(['ABD', 'CANC', 'PST', 'AWD', 'WO']);
 
@@ -169,6 +170,33 @@ function register(server) {
         }
 
         return { considered: pending.length, settled, stillPending, failures };
+      })
+  );
+
+  server.registerTool(
+    'get_ledger_summary',
+    {
+      title: 'Score the ledger',
+      description: 'Scores the agent\'s probabilities against the baseline\'s over the same '
+        + 'settled predictions: Brier, log loss, calibration by band, and realised P&L in units. '
+        + 'There is no win rate — with varying prices it means nothing. Below '
+        + `${scoring.INSUFFICIENT_N} settled predictions the verdict is "insufficient" rather `
+        + 'than a number that looks meaningful.',
+      inputSchema: {
+        market: z.string().optional().describe('Restrict to one market family, e.g. "corners".'),
+        from: z.string().optional().describe('ISO date; include predictions recorded on or after it.'),
+        to: z.string().optional().describe('ISO date; include predictions recorded before it.')
+      }
+    },
+    async ({ market, from, to }) =>
+      run('get_ledger_summary', async () => {
+        const records = store.readAll();
+        const inWindow = (r) => (!from || r.recordedAt >= from) && (!to || r.recordedAt < to);
+        return scoring.summarise(
+          records.filter((r) => r.type === 'prediction' && inWindow(r)),
+          records.filter((r) => r.type === 'settlement'),
+          market || null
+        );
       })
   );
 }
