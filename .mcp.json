@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "football-stats": {
+      "command": "node",
+      "args": ["radar-sport-api-master/mcp-server/server.js"],
+      "env": {
+        "API_FOOTBALL_KEY": "${API_FOOTBALL_KEY}"
+      }
+    }
+  }
+}
