@@ -155,6 +155,23 @@ cost many requests for a small correction), no opponent-strength adjustment, equ
 matches with no recency decay, and a venue split that falls back to all matches below a
 four-match sample.
 
+### The cross-season window
+
+`get_team_corner_profile` takes the last `matchCount` matches regardless of which season they
+belong to. In August this means a profile built almost entirely on **last season's** team: a
+different manager, a sold striker, and for a promoted side, second-division opposition. The profile
+is accurate about a team that no longer exists.
+
+Every baseline therefore reports `sampleSeasons: { current: n, previous: m }` and emits a caveat
+whenever `previous > 0`. The bulletin shows the split beside each pick.
+
+The alternative — suppressing a league until it has played some threshold of matches — was
+considered and **rejected**. It assumes last season's data is worth nothing, which is false: it is
+worth less, and the ledger is the instrument that measures how much less. Blocking the leagues in
+their opening weeks would also destroy the sample in exactly the period the owner is most eager to
+watch, and would replace a measurable weakness with an unmeasurable gap. Owner's decision,
+2026-08-17: declare, do not block.
+
 ### `get_market_probabilities(fixtureId, market)`
 
 Odds converted to probability with the bookmaker's margin removed, per bookmaker and in consensus.
@@ -364,7 +381,7 @@ contaminated in its first month ruins precisely the measurement that justifies t
 
 | Key | Proposed | Why |
 |---|---|---|
-| `leagues` | owner-supplied | Without it there is no run; see *Open questions* |
+| `leagues` | `[39, 140, 135, 78, 61, 94, 71, 307]` | Resolved 2026-08-17 against the live API; see *Open questions* |
 | `windowHours` | 48 | Fixtures kicking off within 48h of the run — wide enough that a missed day still catches most matches |
 | `minEdge` | 0.03 | Below 3 pp the edge sits inside the baseline's own error, so acting on it is acting on noise |
 | `maxPicks` | 8 per day | A shortlist forces choosing |
@@ -399,9 +416,28 @@ allowance mostly unspent.
 
 ## Open questions
 
-1. **Which leagues?** `config.leagues` cannot be defaulted — it is the throttle on the whole run
-   and it depends on what the owner follows. Needed before the first live run, not before
-   implementation.
+1. **Resolved 2026-08-17 against the live API.** Eight leagues, IDs and current seasons verified:
+
+   | League | ID | Season | Starts | Ends |
+   |---|---|---|---|---|
+   | Premier League | 39 | 2026 | 2026-08-21 | 2027-05-30 |
+   | La Liga | 140 | 2026 | 2026-08-15 | 2027-05-30 |
+   | Serie A (Italy) | 135 | 2026 | 2026-08-22 | 2027-05-30 |
+   | Bundesliga | 78 | 2026 | 2026-08-28 | 2027-05-22 |
+   | Ligue 1 | 61 | 2026 | 2026-08-21 | 2027-05-29 |
+   | Primeira Liga | 94 | 2026 | 2026-08-07 | 2027-05-16 |
+   | Brasileirão Série A | 71 | 2026 | 2026-01-28 | 2026-12-02 |
+   | Saudi Pro League | 307 | 2026 | 2026-08-13 | 2027-05-28 |
+
+   **The season-year convention is uniform.** Every league — Brazil included, despite its
+   January-to-December calendar — is `season=2026`. No per-league special-casing is needed, which
+   was a genuine risk worth checking rather than assuming.
+
+   **Four of the eight had not kicked off when this was resolved** (England and France on the 21st,
+   Italy the 22nd, Germany the 28th), so their opening bulletins run on cross-season samples. See
+   *The cross-season window* for how that is handled. Brazil, seven months into its season, is the
+   one league with a fully current sample and is therefore the soundest place to judge the system's
+   early output.
 2. **Resolved 2026-08-17: the plan is API-Football Pro — 7,500 requests/day**, active to
    2026-09-17. No change to `MCP_MAX_REQUESTS_PER_CALL` (25) or `MAX_MATCH_COUNT` (20) is needed:
    the ceiling is per *call*, one call is one team's profile, and a profile spends at most
