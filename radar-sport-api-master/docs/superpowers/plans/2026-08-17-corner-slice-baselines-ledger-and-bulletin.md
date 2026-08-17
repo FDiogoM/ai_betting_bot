@@ -1292,7 +1292,9 @@ function handlers() {
   return server.tools;
 }
 
-function book(name, overOdd, underOdd, marketName = 'Total Corners') {
+// 'Corners Over Under' is the exact full-match total name the Task 1 probe
+// found. Do not loosen it in these fixtures — the anchoring is the point.
+function book(name, overOdd, underOdd, marketName = 'Corners Over Under') {
   return {
     id: 1,
     name,
@@ -1336,12 +1338,56 @@ test('parseCornerQuotes ignores markets that are not about corners', () => {
   assert.deepStrictEqual(parseCornerQuotes(body.response), []);
 });
 
+// The live probe found ten adjacent markets whose names contain "corners" but
+// which are different bets. Pooling any of them into the full-match buckets
+// would back the wrong selection — silently, with a plausible-looking line.
+test('parseCornerQuotes rejects every adjacent corner market', () => {
+  const adjacent = [
+    'Home Corners Over/Under', 'Away Corners Over/Under', 'Total Corners (3 way)',
+    'Total Corners (1st Half)', 'Corners 1x2', 'Corners Asian Handicap',
+    'Corners. Odd/Even', 'Corners. Total (Range)', 'Corners Race To', 'Multicorners',
+    'Corners. European Handicap'
+  ];
+
+  for (const marketName of adjacent) {
+    const quotes = parseCornerQuotes(oddsBody([book('A', 1.95, 1.85, marketName)]).response);
+    assert.deepStrictEqual(quotes, [], `${marketName} must not be read as the full-match total`);
+  }
+});
+
+test('parseCornerQuotes accepts the exact full-match total name', () => {
+  const quotes = parseCornerQuotes(oddsBody([book('A', 1.95, 1.85, 'Corners Over Under')]).response);
+
+  assert.strictEqual(quotes.length, 1);
+  assert.strictEqual(quotes[0].line, 9.5);
+});
+
+// Pinnacle quotes whole lines alongside half lines. A whole line pushes when the
+// total lands on it, and nothing downstream can represent a push.
+test('parseCornerQuotes drops whole lines and keeps half lines', () => {
+  const body = oddsBody([{
+    id: 1,
+    name: 'Pinnacle',
+    bets: [{
+      name: 'Corners Over Under',
+      values: [
+        { value: 'Over 9', odd: '1.49' }, { value: 'Under 9', odd: '2.47' },
+        { value: 'Over 9.5', odd: '1.67' }, { value: 'Under 9.5', odd: '2.15' }
+      ]
+    }]
+  }]);
+
+  const quotes = parseCornerQuotes(body.response);
+
+  assert.deepStrictEqual(quotes.map((q) => q.line), [9.5]);
+});
+
 test('parseCornerQuotes skips an unparseable value rather than guessing it', () => {
   const body = oddsBody([{
     id: 1,
     name: 'A',
     bets: [{
-      name: 'Total Corners',
+      name: 'Corners Over Under',
       values: [{ value: 'Yes', odd: '1.90' }, { value: 'Over 9.5', odd: '1.95' }]
     }]
   }]);
@@ -1413,19 +1459,36 @@ Create `mcp-server/aggregate/cornerOdds.js`:
 ```js
 'use strict';
 
-// Market names are provider- and bookmaker-specific and were confirmed by the
-// live probe in Task 1. A list, not a constant, so a newly-seen name is one
-// line rather than a rewrite.
+// Confirmed by the Task 1 live probe (2026-08-17): the full-match corner
+// total over/under market is named exactly "Corners Over Under", quoted by
+// 10Bet, Bet365, Marathonbet, Unibet and Pinnacle.
+//
+// ANCHORED, not loose. The same response carries "Home Corners Over/Under",
+// "Away Corners Over/Under", "Total Corners (3 way)", "Total Corners
+// (1st Half)", "Corners 1x2", "Corners Asian Handicap", "Corners. Odd/Even",
+// "Corners. Total (Range)", "Corners Race To", "Multicorners" and "Corners.
+// European Handicap". Those are different bets. A loose /corner.*over.*under/
+// would pool a per-team 2.5 line and a first-half 4.5 line into the full-match
+// buckets and back the wrong selection.
 const CORNER_MARKET_PATTERNS = [
-  /total.*corner/i,
-  /corner.*over.*under/i,
-  /^corners$/i
+  /^corners?\s+over\s*\/?\s*under$/i
+];
+
+// Second layer, deliberately redundant with the anchors above: if a new
+// bookmaker name ever slips past them, these keywords still keep a non-total
+// market out. Belt and braces, because the failure mode is a silently wrong bet
+// rather than a crash.
+const NOT_FULL_MATCH_TOTAL = [
+  /\bhome\b/i, /\baway\b/i, /\bhalf\b/i, /3\s*way/i, /handicap/i,
+  /odd\s*\/?\s*even/i, /range/i, /race/i, /multi/i, /1\s*x\s*2/i
 ];
 
 const SIDE = /^(over|under)\s+(\d+(?:\.\d+)?)$/i;
 
 function isCornerMarket(name) {
-  return CORNER_MARKET_PATTERNS.some((p) => p.test(String(name || '')));
+  const text = String(name || '').trim();
+  if (NOT_FULL_MATCH_TOTAL.some((p) => p.test(text))) return false;
+  return CORNER_MARKET_PATTERNS.some((p) => p.test(text));
 }
 
 // Returns [{ line, over: [{bookmaker, odd}], under: [{bookmaker, odd}] }],
@@ -1459,7 +1522,9 @@ function parseCornerQuotes(oddsResponse) {
   return [...byLine.values()].sort((a, b) => a.line - b.line);
 }
 
-module.exports = { parseCornerQuotes, CORNER_MARKET_PATTERNS, isCornerMarket };
+module.exports = {
+  parseCornerQuotes, CORNER_MARKET_PATTERNS, NOT_FULL_MATCH_TOTAL, isCornerMarket
+};
 ```
 
 - [ ] **Step 4: Add the tool to `tools/baselines.js`**

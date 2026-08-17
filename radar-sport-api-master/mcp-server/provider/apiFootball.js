@@ -13,7 +13,8 @@ const ENDPOINTS = {
   HEAD_TO_HEAD: '/fixtures/headtohead',
   FIXTURE_STATISTICS: '/fixtures/statistics',
   STANDINGS: '/standings',
-  TEAM_STATISTICS: '/teams/statistics'
+  TEAM_STATISTICS: '/teams/statistics',
+  ODDS: '/odds'
 };
 
 const FINISHED_STATUSES = new Set(['FT', 'AET', 'PEN']);
