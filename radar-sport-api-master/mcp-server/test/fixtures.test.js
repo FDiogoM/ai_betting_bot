@@ -123,7 +123,7 @@ test('a last-N window of finished matches is not cached permanently', async () =
   const entry = soleCacheEntry(process.env.MCP_CACHE_DIR);
   assert.notStrictEqual(entry.expiresAt, null,
     'a sliding window must expire even when every match in it is finished');
-  assert.ok(entry.expiresAt - entry.storedAt <= cache.TTL.LIVE);
+  assert.strictEqual(entry.expiresAt - entry.storedAt, cache.TTL.LIVE);
 });
 
 // Same defect: the next meeting between two teams would never appear.
@@ -137,7 +137,7 @@ test('a head-to-head history of finished matches is not cached permanently', asy
   const entry = soleCacheEntry(process.env.MCP_CACHE_DIR);
   assert.notStrictEqual(entry.expiresAt, null,
     'head-to-head gains new meetings, so it must expire');
-  assert.ok(entry.expiresAt - entry.storedAt <= cache.TTL.TABLE);
+  assert.strictEqual(entry.expiresAt - entry.storedAt, cache.TTL.TABLE);
 });
 
 // One cache key must have one expiry policy, whichever tool wrote it last.
@@ -174,7 +174,7 @@ test('get_team_fixtures and the corner profile agree on the TTL for the same key
       ? null : fromCornerProfile.expiresAt - fromCornerProfile.storedAt;
     assert.notStrictEqual(windowA, null, 'the fixtures tool must not write this key permanently');
     assert.notStrictEqual(windowB, null, 'the corner profile must not write this key permanently');
-    assert.ok(Math.abs(windowA - windowB) <= 2,
+    assert.strictEqual(windowA, windowB,
       `TTL disagreement for one key: ${windowA}ms vs ${windowB}ms`);
   } finally {
     process.env.MCP_CACHE_DIR = dirA;

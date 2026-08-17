@@ -46,6 +46,18 @@ test('a param value containing the key separator cannot collide with other param
     'distinct param sets must never share a cache key');
 });
 
+// Two Date.now() readings could straddle a millisecond, making the stored
+// window ttlMs + drift and any `window <= TTL` assertion intermittent.
+test('the stored window is exactly the requested TTL', () => {
+  cache.write('/fixtures', { id: 1 }, 'value', cache.TTL.LIVE);
+
+  const names = fs.readdirSync(process.env.MCP_CACHE_DIR)
+    .filter((f) => /^[0-9a-f]{64}\.json$/.test(f));
+  assert.strictEqual(names.length, 1);
+  const entry = JSON.parse(fs.readFileSync(path.join(process.env.MCP_CACHE_DIR, names[0]), 'utf8'));
+  assert.strictEqual(entry.expiresAt - entry.storedAt, cache.TTL.LIVE);
+});
+
 test('a miss returns null', () => {
   assert.strictEqual(cache.read('/fixtures', { id: 99 }), null);
 });

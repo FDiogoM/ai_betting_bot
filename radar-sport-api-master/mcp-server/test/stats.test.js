@@ -80,7 +80,7 @@ test('an empty statistics response is not cached permanently', async () => {
   const entry = soleCacheEntry(process.env.MCP_CACHE_DIR);
   assert.notStrictEqual(entry.expiresAt, null,
     'statistics that came back empty must be retried later');
-  assert.ok(entry.expiresAt - entry.storedAt <= cache.TTL.LIVE);
+  assert.strictEqual(entry.expiresAt - entry.storedAt, cache.TTL.LIVE);
 });
 
 test('populated statistics are still cached permanently', async () => {

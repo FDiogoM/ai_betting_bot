@@ -54,9 +54,12 @@ function read(endpoint, params) {
 
 function write(endpoint, params, value, ttlMs) {
   fs.mkdirSync(cacheDir(), { recursive: true });
+  // One clock reading for both fields: two calls can straddle a millisecond,
+  // which makes the stored window ttlMs + drift rather than exactly ttlMs.
+  const now = Date.now();
   const entry = {
-    storedAt: Date.now(),
-    expiresAt: ttlMs === null || ttlMs === undefined ? null : Date.now() + ttlMs,
+    storedAt: now,
+    expiresAt: ttlMs === null || ttlMs === undefined ? null : now + ttlMs,
     value
   };
   fs.writeFileSync(entryPath(endpoint, params), JSON.stringify(entry), 'utf8');
