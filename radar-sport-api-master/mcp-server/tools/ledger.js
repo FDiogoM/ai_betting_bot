@@ -5,6 +5,56 @@ const store = require('../ledger/store');
 const { predictionSchema, predictionId, DIVERGENCE_THRESHOLD } = require('../ledger/schema');
 const { evaluate } = require('../baselines/value');
 const { run } = require('../result');
+const provider = require('../provider/apiFootball');
+const cache = require('../cache');
+const aggregate = require('../aggregate/cornerProfile');
+
+const VOID_STATUSES = new Set(['ABD', 'CANC', 'PST', 'AWD', 'WO']);
+
+// Settles one prediction, or returns null to leave it pending. Never infers a
+// result: a finished match whose corner statistic is missing is void, because
+// treating a missing number as zero would grade an under as a win.
+async function settle(prediction) {
+  const found = await provider.fetch(provider.ENDPOINTS.FIXTURES,
+    { id: prediction.fixture.id }, cache.TTL.LIVE);
+  if (!found.length) throw new Error(`fixture ${prediction.fixture.id} was not found`);
+
+  const fixture = found[0];
+  const status = fixture.fixture.status.short;
+
+  const settlement = {
+    type: 'settlement',
+    predictionId: prediction.id,
+    settledAt: new Date().toISOString(),
+    fixtureStatus: status
+  };
+
+  if (VOID_STATUSES.has(status)) {
+    return { ...settlement, observed: { totalCorners: null }, outcome: 'void', returnUnits: 0 };
+  }
+  if (!provider.isFinished(fixture)) return null;
+
+  const entries = await aggregate.fetchStatistics(fixture.fixture.id, false, cache.TTL.PERMANENT);
+  const home = aggregate.cornerValue(entries, fixture.teams.home.id);
+  const away = aggregate.cornerValue(entries, fixture.teams.away.id);
+  if (home === null || away === null) {
+    return { ...settlement, observed: { totalCorners: null }, outcome: 'void', returnUnits: 0 };
+  }
+
+  const total = home + away;
+  const cleared = total > prediction.market.line;
+  const won = prediction.market.selection === 'over' ? cleared : !cleared;
+  const stake = prediction.agent.stake;
+
+  return {
+    ...settlement,
+    observed: { totalCorners: total },
+    outcome: won ? 'win' : 'loss',
+    returnUnits: won
+      ? Math.round(stake * (prediction.marketView.bestPrice - 1) * 1e6) / 1e6
+      : -stake
+  };
+}
 
 function register(server) {
   server.registerTool(
@@ -78,6 +128,47 @@ function register(server) {
 
         store.append(record);
         return { id, edge: record.edge, expectedValue: record.expectedValue };
+      })
+  );
+
+  server.registerTool(
+    'grade_pending_predictions',
+    {
+      title: 'Grade every prediction whose match has finished',
+      description: 'Settles all outstanding predictions, not just yesterday\'s, so a missed run '
+        + 'costs a day of picks rather than the record. Idempotent: a prediction that already '
+        + 'carries a settlement is skipped. A finished match with no corner statistic is voided, '
+        + 'never guessed.',
+      inputSchema: {}
+    },
+    async () =>
+      run('grade_pending_predictions', async () => {
+        const records = store.readAll();
+        const settledIds = new Set(records.filter((r) => r.type === 'settlement')
+          .map((r) => r.predictionId));
+        const pending = records.filter((r) => r.type === 'prediction' && !settledIds.has(r.id));
+
+        let settled = 0;
+        let stillPending = 0;
+        const failures = [];
+
+        // Sequential: the ledger is a single append-only file, and a settlement
+        // count that races its own writes is worse than a slow run.
+        for (const prediction of pending) {
+          try {
+            const settlement = await settle(prediction);
+            if (!settlement) {
+              stillPending += 1;
+              continue;
+            }
+            store.append(settlement);
+            settled += 1;
+          } catch (err) {
+            failures.push({ predictionId: prediction.id, reason: err && err.message ? err.message : String(err) });
+          }
+        }
+
+        return { considered: pending.length, settled, stillPending, failures };
       })
   );
 }
