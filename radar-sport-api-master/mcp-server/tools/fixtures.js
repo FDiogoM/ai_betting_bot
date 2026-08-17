@@ -13,6 +13,10 @@ const season = z.number().int().min(2000).max(2100).describe('Season start year,
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Date as YYYY-MM-DD.');
 
 // A response of all-finished fixtures never changes; anything else might.
+// Only safe for queries that name a fixed set of fixtures — an id, or a league
+// plus a closed date range. A sliding window (last/next N, head-to-head) must
+// NOT use this: its members are immutable but its membership is not, so the
+// all-finished branch would pin the first answer forever.
 function ttlFromFixtures(data) {
   return data.length && data.every(provider.isFinished) ? cache.TTL.PERMANENT : cache.TTL.LIVE;
 }
@@ -50,8 +54,10 @@ function register(server) {
         return fail('Supply either last or next, not both and not neither.');
       }
       const params = last ? { team: teamId, last } : { team: teamId, next };
+      // A sliding window, so a short lifetime regardless of what came back.
+      // get_team_corner_profile seeds itself from this same key and TTL.
       return run(`get_team_fixtures(${teamId})`, () =>
-        provider.fetch(provider.ENDPOINTS.FIXTURES, params, ttlFromFixtures, forceRefresh));
+        provider.fetch(provider.ENDPOINTS.FIXTURES, params, cache.TTL.LIVE, forceRefresh));
     }
   );
 
@@ -74,10 +80,12 @@ function register(server) {
       description: 'Historical meetings between two teams, most recent first.',
       inputSchema: { teamId, opponentId: z.number().int().positive().describe('The other team\'s ID.'), forceRefresh }
     },
+    // Also a sliding window: the history is immutable but gains new meetings,
+    // so it expires on the slower TABLE cadence rather than never.
     async ({ teamId, opponentId, forceRefresh }) =>
       run(`get_head_to_head(${teamId}-${opponentId})`, () =>
         provider.fetch(provider.ENDPOINTS.HEAD_TO_HEAD,
-          { h2h: `${teamId}-${opponentId}` }, ttlFromFixtures, forceRefresh))
+          { h2h: `${teamId}-${opponentId}` }, cache.TTL.TABLE, forceRefresh))
   );
 
   server.registerTool(

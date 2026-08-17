@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const nock = require('nock');
 
+const cache = require('../cache');
 const stats = require('../tools/stats');
 
 const BASE = 'https://v3.football.api-sports.io';
@@ -39,6 +40,13 @@ function statsFor(homeId, awayId, homeCorners, awayCorners) {
   };
 }
 
+function soleCacheEntry(dir) {
+  const names = fs.readdirSync(dir).filter((f) => /^[0-9a-f]{64}\.json$/.test(f));
+  assert.strictEqual(names.length, 1,
+    `expected exactly one cache entry, found: ${fs.readdirSync(dir).join(', ')}`);
+  return JSON.parse(fs.readFileSync(path.join(dir, names[0]), 'utf8'));
+}
+
 test.beforeEach(() => {
   nock.cleanAll();
   process.env.API_FOOTBALL_KEY = 'test-key-123';
@@ -57,6 +65,31 @@ test('get_fixture_statistics returns the per-team statistics', async () => {
 
   assert.ok(!result.isError, result.content[0].text);
   assert.match(result.content[0].text, /Corner Kicks/);
+});
+
+// An unplayed fixture answers /fixtures/statistics with []. Storing that
+// permanently would report "empty" forever, even after the match is played.
+test('an empty statistics response is not cached permanently', async () => {
+  nock(BASE).get('/fixtures/statistics').query({ fixture: '9' })
+    .reply(200, { errors: [], response: [] });
+
+  const result = await handlers().get('get_fixture_statistics').handler({ fixtureId: 9 });
+
+  assert.ok(!result.isError, result.content[0].text);
+  assert.match(result.content[0].text, /"empty": true/);
+  const entry = soleCacheEntry(process.env.MCP_CACHE_DIR);
+  assert.notStrictEqual(entry.expiresAt, null,
+    'statistics that came back empty must be retried later');
+  assert.ok(entry.expiresAt - entry.storedAt <= cache.TTL.LIVE);
+});
+
+test('populated statistics are still cached permanently', async () => {
+  nock(BASE).get('/fixtures/statistics').query({ fixture: '1' }).reply(200, statsFor(33, 34, 7, 3));
+
+  await handlers().get('get_fixture_statistics').handler({ fixtureId: 1 });
+
+  assert.strictEqual(soleCacheEntry(process.env.MCP_CACHE_DIR).expiresAt, null,
+    'a played match\'s statistics are immutable');
 });
 
 test('the corner profile totals corners for and against', async () => {
@@ -87,6 +120,27 @@ test('a match whose statistics fail is reported, not silently dropped', async ()
   assert.strictEqual(body.matchesAnalyzed, 1);
   assert.strictEqual(body.failures.length, 1);
   assert.strictEqual(body.failures[0].fixtureId, 2);
+});
+
+// isFinished only validates fixture.status.short, so a finished fixture can
+// still arrive without `teams`. That must cost one match, not the whole call.
+test('a fixture with a malformed shape fails only that match', async () => {
+  const malformed = { fixture: { id: 2, status: { short: 'FT' }, date: '2026-08-02T12:00:00+00:00' } };
+  nock(BASE).get('/fixtures').query({ team: '33', last: '3' }).reply(200, {
+    errors: [],
+    response: [finishedFixture(1, 33, 34), malformed, finishedFixture(3, 35, 33)]
+  });
+  nock(BASE).get('/fixtures/statistics').query({ fixture: '1' }).reply(200, statsFor(33, 34, 7, 3));
+  nock(BASE).get('/fixtures/statistics').query({ fixture: '3' }).reply(200, statsFor(35, 33, 4, 6));
+
+  const result = await handlers().get('get_team_corner_profile').handler({ teamId: 33, matchCount: 3 });
+
+  assert.ok(!result.isError, result.content[0].text);
+  const body = JSON.parse(result.content[0].text);
+  assert.strictEqual(body.matchesAnalyzed, 2, 'good matches must survive one bad one');
+  assert.strictEqual(body.failures.length, 1);
+  assert.strictEqual(body.failures[0].fixtureId, 2);
+  assert.match(body.failures[0].reason, /shape/i);
 });
 
 test('a null corner value is treated as missing, never as zero', async () => {
@@ -150,6 +204,13 @@ test('matchCount above the hard cap is rejected by the schema', () => {
 
   assert.throws(() => schema.matchCount.parse(21));
   assert.strictEqual(schema.matchCount.parse(20), 20);
+});
+
+// The default belongs to the schema so an MCP client can discover it.
+test('matchCount defaults to 10 in the schema', () => {
+  const schema = handlers().get('get_team_corner_profile').config.inputSchema;
+
+  assert.strictEqual(schema.matchCount.parse(undefined), 10);
 });
 
 test('get_team_season_statistics requests the aggregate endpoint', async () => {

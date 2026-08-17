@@ -37,6 +37,15 @@ test('param order does not change the cache key', () => {
   assert.strictEqual(cache.read('/fixtures', { b: 2, a: 1 }), 'value');
 });
 
+// Joining raw `k=v` pairs made these two param sets hash identically, so one
+// would silently be served the other's cached data.
+test('a param value containing the key separator cannot collide with other params', () => {
+  cache.write('/fixtures', { a: '1&b=2' }, 'ambiguous', cache.TTL.PERMANENT);
+
+  assert.strictEqual(cache.read('/fixtures', { a: 1, b: 2 }), null,
+    'distinct param sets must never share a cache key');
+});
+
 test('a miss returns null', () => {
   assert.strictEqual(cache.read('/fixtures', { id: 99 }), null);
 });

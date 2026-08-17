@@ -4,7 +4,7 @@ const { z } = require('zod');
 const provider = require('../provider/apiFootball');
 const cache = require('../cache');
 const quota = require('../quota');
-const { run, fail, ok } = require('../result');
+const { run } = require('../result');
 
 const CORNER_TYPE = 'Corner Kicks';
 const CONCURRENCY = 3;
@@ -18,11 +18,19 @@ function statisticsParams(fixtureId) {
   return { fixture: fixtureId };
 }
 
-// Finished-match statistics are immutable, so they are cached permanently.
-// This is what makes repeat corner analysis nearly free.
-function fetchStatistics(fixtureId, force) {
+// Finished-match statistics are immutable, so a caller that has already
+// established the match is finished passes TTL.PERMANENT — that is what makes
+// repeat corner analysis nearly free. A caller that has not must not, because
+// an unplayed fixture answers with [], and storing that permanently would
+// report "empty" forever.
+function fetchStatistics(fixtureId, force, ttl) {
   return provider.fetch(provider.ENDPOINTS.FIXTURE_STATISTICS,
-    statisticsParams(fixtureId), cache.TTL.PERMANENT, force);
+    statisticsParams(fixtureId), ttl, force);
+}
+
+// Whether a response can be trusted as final, judged from the response itself.
+function statisticsTtl(data) {
+  return data.length ? cache.TTL.PERMANENT : cache.TTL.LIVE;
 }
 
 function cornerValue(entries, teamId) {
@@ -39,10 +47,19 @@ function cornerValue(entries, teamId) {
 async function mapWithConcurrency(items, limit, worker) {
   const results = new Array(items.length);
   let cursor = 0;
+  let doomed = false;
   async function pump() {
-    while (cursor < items.length) {
+    while (cursor < items.length && !doomed) {
       const index = cursor++;
-      results[index] = await worker(items[index], index);
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (err) {
+        // Promise.all rejects on the first failure, so the call is already
+        // lost. Without this the surviving workers keep draining the cursor
+        // and spending quota on a call that has returned an error.
+        doomed = true;
+        throw err;
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, pump));
@@ -58,8 +75,11 @@ function register(server) {
         + 'target, possession, offsides and fouls. Finished matches are cached permanently.',
       inputSchema: { fixtureId: z.number().int().positive().describe('Fixture ID.'), forceRefresh }
     },
+    // No isFinished guard here — that would cost an extra /fixtures request —
+    // so the TTL is decided from the response instead.
     async ({ fixtureId, forceRefresh }) =>
-      run(`get_fixture_statistics(${fixtureId})`, () => fetchStatistics(fixtureId, forceRefresh))
+      run(`get_fixture_statistics(${fixtureId})`, () =>
+        fetchStatistics(fixtureId, forceRefresh, statisticsTtl))
   );
 
   server.registerTool(
@@ -92,20 +112,17 @@ function register(server) {
         + 'request per uncached match, so check get_api_status first when the quota is tight.',
       inputSchema: {
         teamId: z.number().int().positive().describe('Team ID from search_teams.'),
-        matchCount: z.number().int().min(1).max(MAX_MATCH_COUNT).optional()
+        // The default lives in the schema so an MCP client can discover it.
+        matchCount: z.number().int().min(1).max(MAX_MATCH_COUNT).default(DEFAULT_MATCH_COUNT)
           .describe(`How many recent finished matches to analyze (default ${DEFAULT_MATCH_COUNT}, max ${MAX_MATCH_COUNT}).`),
         forceRefresh
       }
     },
-    async ({ teamId, matchCount = DEFAULT_MATCH_COUNT, forceRefresh }) =>
+    async ({ teamId, matchCount, forceRefresh }) =>
       run(`get_team_corner_profile(${teamId})`, async () => {
-        let fixtures;
-        try {
-          fixtures = await provider.fetch(provider.ENDPOINTS.FIXTURES,
-            { team: teamId, last: matchCount }, cache.TTL.LIVE, forceRefresh);
-        } catch (err) {
-          throw err;
-        }
+        // Same key and TTL as get_team_fixtures({team, last}): a sliding window.
+        const fixtures = await provider.fetch(provider.ENDPOINTS.FIXTURES,
+          { team: teamId, last: matchCount }, cache.TTL.LIVE, forceRefresh);
 
         const finished = fixtures.filter(provider.isFinished);
         if (!finished.length) {
@@ -117,8 +134,8 @@ function register(server) {
         const ceiling = quota.maxRequestsPerCall();
         const needed = forceRefresh
           ? finished.length
-          : finished.filter((f) => cache.read(provider.ENDPOINTS.FIXTURE_STATISTICS,
-              statisticsParams(f.fixture.id)) === null).length;
+          : provider.countUncached(provider.ENDPOINTS.FIXTURE_STATISTICS,
+              finished.map((f) => statisticsParams(f.fixture.id)));
         if (needed > ceiling) {
           throw new Error(`would need ${needed} requests, above the `
             + `per-call ceiling of ${ceiling}. Lower matchCount, or raise MCP_MAX_REQUESTS_PER_CALL.`);
@@ -127,34 +144,47 @@ function register(server) {
         const matches = [];
         const failures = [];
 
-        await mapWithConcurrency(finished, CONCURRENCY, async (fixture) => {
-          const id = fixture.fixture.id;
-          const isHome = fixture.teams.home.id === teamId;
-          const opponent = isHome ? fixture.teams.away : fixture.teams.home;
-
-          let entries;
+        // isFinished only validates fixture.status.short, so a fixture can pass
+        // it and still be missing `teams`. Everything that reads the fixture is
+        // inside the try: one unexpected shape costs one match, not the call.
+        await mapWithConcurrency(finished, CONCURRENCY, async (fixture, index) => {
+          let id = null;
           try {
-            entries = await fetchStatistics(id, forceRefresh);
+            id = fixture.fixture.id;
+            const isHome = fixture.teams.home.id === teamId;
+            const opponent = isHome ? fixture.teams.away : fixture.teams.home;
+
+            let entries;
+            try {
+              // Already filtered to finished matches, so these are immutable.
+              entries = await fetchStatistics(id, forceRefresh, cache.TTL.PERMANENT);
+            } catch (err) {
+              failures.push({ fixtureId: id, reason: err.message });
+              return;
+            }
+
+            const cornersFor = cornerValue(entries, teamId);
+            const cornersAgainst = cornerValue(entries, opponent.id);
+            if (cornersFor === null || cornersAgainst === null) {
+              failures.push({ fixtureId: id, reason: 'no corner statistics recorded for this match' });
+              return;
+            }
+
+            matches.push({
+              fixtureId: id,
+              date: fixture.fixture.date,
+              opponent: opponent.name,
+              venue: isHome ? 'home' : 'away',
+              cornersFor,
+              cornersAgainst
+            });
           } catch (err) {
-            failures.push({ fixtureId: id, reason: err.message });
-            return;
+            failures.push({
+              fixtureId: id,
+              reason: `fixture at index ${index} has an unexpected shape: `
+                + `${err && err.message ? err.message : String(err)}`
+            });
           }
-
-          const cornersFor = cornerValue(entries, teamId);
-          const cornersAgainst = cornerValue(entries, opponent.id);
-          if (cornersFor === null || cornersAgainst === null) {
-            failures.push({ fixtureId: id, reason: 'no corner statistics recorded for this match' });
-            return;
-          }
-
-          matches.push({
-            fixtureId: id,
-            date: fixture.fixture.date,
-            opponent: opponent.name,
-            venue: isHome ? 'home' : 'away',
-            cornersFor,
-            cornersAgainst
-          });
         });
 
         matches.sort((a, b) => String(b.date).localeCompare(String(a.date)));

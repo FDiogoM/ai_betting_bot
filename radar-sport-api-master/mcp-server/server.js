@@ -21,6 +21,9 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('fatal:', err);
+  // Never log a raw error object: an AxiosError serializes err.config.headers,
+  // which carries x-apisports-key. Message and stack carry no credentials.
+  console.error('fatal:', err && err.message ? err.message : String(err));
+  if (err && err.stack) console.error(err.stack);
   process.exit(1);
 });

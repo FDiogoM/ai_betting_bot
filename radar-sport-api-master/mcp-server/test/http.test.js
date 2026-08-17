@@ -114,6 +114,24 @@ test('a missing API key fails before any request is made', async () => {
   nock.cleanAll();
 });
 
+// Guards the timeout constraint itself: without `timeout: timeoutMs()` on the
+// axios call this hangs until nock's delay elapses and then succeeds.
+test('a request that outlives MCP_HTTP_TIMEOUT_MS is aborted with a timeout error', async () => {
+  process.env.MCP_HTTP_TIMEOUT_MS = '40';
+  nock(BASE).get('/status').delayConnection(500)
+    .reply(200, { errors: [], response: [] });
+
+  try {
+    await assert.rejects(
+      () => http.request('/status'),
+      (err) => err instanceof http.ApiError && /timed out/i.test(err.message)
+    );
+  } finally {
+    delete process.env.MCP_HTTP_TIMEOUT_MS;
+    nock.cleanAll();
+  }
+});
+
 test('the API key never appears in an error message', async () => {
   nock(BASE).get('/status').reply(500, { message: 'boom' });
 

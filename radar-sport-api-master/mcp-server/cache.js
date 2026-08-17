@@ -18,9 +18,12 @@ function cacheDir() {
 
 function keyFor(endpoint, params) {
   // Sort so param order cannot produce two entries for one logical request.
-  const sorted = Object.keys(params || {}).sort()
-    .map((k) => `${k}=${params[k]}`).join('&');
-  return crypto.createHash('sha256').update(`${endpoint}?${sorted}`).digest('hex');
+  // JSON-encode rather than joining `k=v` pairs: joining made {a: "1&b=2"} and
+  // {a: 1, b: 2} hash identically, so one request could be served the other's
+  // cached data with no way to notice.
+  const sorted = Object.keys(params || {}).sort().map((k) => [k, params[k]]);
+  return crypto.createHash('sha256')
+    .update(JSON.stringify([endpoint, sorted])).digest('hex');
 }
 
 function entryPath(endpoint, params) {

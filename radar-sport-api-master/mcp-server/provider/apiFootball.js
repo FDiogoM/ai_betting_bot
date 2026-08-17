@@ -41,4 +41,11 @@ async function fetch(endpoint, params = {}, ttl = cache.TTL.LIVE, forceRefresh =
   return data;
 }
 
-module.exports = { fetch, isFinished, ENDPOINTS };
+// How many of these requests would actually hit the network. A caller that
+// budgets requests before spending them needs this, and it must not have to
+// know how a cache key is derived — that contract lives here, with fetch.
+function countUncached(endpoint, paramsList) {
+  return paramsList.filter((params) => cache.read(endpoint, params) === null).length;
+}
+
+module.exports = { fetch, isFinished, countUncached, ENDPOINTS };

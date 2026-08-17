@@ -62,7 +62,28 @@ test('isFinished recognises full time and rejects scheduled matches', () => {
   assert.strictEqual(provider.isFinished({}), false);
 });
 
-test('get_api_status reports the remaining quota', async () => {
+// /status is the one endpoint whose documented payload is an object, not an
+// array, so `data[0]` reports no account at all against the real API.
+test('get_api_status reports the account from the documented object payload', async () => {
+  nock(BASE).get('/status').reply(200, {
+    errors: [],
+    response: { account: { firstname: 'test' }, subscription: { plan: 'Free' }, requests: { current: 13, limit_day: 100 } }
+  });
+
+  const server = fakeServer();
+  reference.register(server);
+  const result = await server.tools.get('get_api_status').handler({});
+
+  assert.ok(!result.isError, result.content[0].text);
+  const body = JSON.parse(result.content[0].text);
+  assert.ok(body.account, 'an object-shaped /status payload must not read as no account');
+  assert.strictEqual(body.account.subscription.plan, 'Free');
+  assert.match(result.content[0].text, /100/);
+});
+
+// No code on this branch has run against the real API, so both shapes are
+// pinned rather than betting on one.
+test('get_api_status also tolerates an array-wrapped /status payload', async () => {
   nock(BASE).get('/status').reply(200, {
     errors: [],
     response: [{ account: { firstname: 'test' }, subscription: { plan: 'Free' }, requests: { current: 13, limit_day: 100 } }]
@@ -73,6 +94,9 @@ test('get_api_status reports the remaining quota', async () => {
   const result = await server.tools.get('get_api_status').handler({});
 
   assert.ok(!result.isError, result.content[0].text);
+  const body = JSON.parse(result.content[0].text);
+  assert.ok(body.account, 'an array-shaped /status payload must still yield an account');
+  assert.strictEqual(body.account.subscription.plan, 'Free');
   assert.match(result.content[0].text, /100/);
 });
 

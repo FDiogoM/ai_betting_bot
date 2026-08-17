@@ -25,7 +25,11 @@ function register(server) {
     async () => run('get_api_status', async () => {
       const { data, quota: seen } = await http.request(provider.ENDPOINTS.STATUS);
       quota.record(seen);
-      return { account: data[0] || null, lastSeenQuota: quota.read() };
+      // /status is the one endpoint documented to answer with an object rather
+      // than an array, so data[0] would report no account at all. Nothing here
+      // has run against the real API yet; tolerate both shapes.
+      const account = Array.isArray(data) ? data[0] || null : data || null;
+      return { account, lastSeenQuota: quota.read() };
     })
   );
 
