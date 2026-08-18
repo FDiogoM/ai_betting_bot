@@ -6,8 +6,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const nock = require('nock');
+
 const store = require('../ledger/store');
 const ledger = require('../tools/ledger');
+
+const BASE = 'https://v3.football.api-sports.io';
 
 function fakeServer() {
   const tools = new Map();
@@ -20,14 +24,80 @@ function handlers() {
   return server.tools;
 }
 
+// record_prediction derives the baseline and the market view rather than being
+// handed them, so a test that records anything has to stand up the data they
+// are derived FROM. That is the point: there is no longer a way to write a
+// prediction whose baseline nobody computed.
+//
+// The scenario below is fixed so the derived numbers are known:
+//   home team 33 — four home matches, 6 corners for and 4 against
+//   away team 34 — four away matches, 5 corners for and 5 against
+//   λ_home = (6 + 5) / 2 = 5.5, λ_away = (5 + 4) / 2 = 4.5, λ_total = 10
+//   P(over 9.5 | λ = 10) = 0.5421, so P(under 9.5) = 0.4579
+const DERIVED_OVER = 0.5421;
+const DERIVED_UNDER = 0.4579;
+const BEST_PRICE = 1.95;
+
+function finished(id, homeId, awayId) {
+  return {
+    fixture: { id, status: { short: 'FT' }, date: `2026-08-0${id}T12:00:00+00:00` },
+    league: { id: 94, name: 'Primeira Liga', season: 2026 },
+    teams: { home: { id: homeId, name: `T${homeId}` }, away: { id: awayId, name: `T${awayId}` } },
+    goals: { home: 1, away: 1 }
+  };
+}
+
+function cornerStats(fixtureId, teamA, cornersA, teamB, cornersB) {
+  nock(BASE).get('/fixtures/statistics').query({ fixture: String(fixtureId) })
+    .reply(200, {
+      errors: [],
+      response: [
+        { team: { id: teamA }, statistics: [{ type: 'Corner Kicks', value: cornersA }] },
+        { team: { id: teamB }, statistics: [{ type: 'Corner Kicks', value: cornersB }] }
+      ]
+    });
+}
+
+function stubScenario() {
+  nock(BASE).get('/fixtures').query({ id: '500' }).reply(200, {
+    errors: [],
+    response: [{
+      fixture: { id: 500, status: { short: 'NS' }, date: '2026-08-22T19:00:00+00:00' },
+      league: { id: 94, name: 'Primeira Liga', season: 2026 },
+      teams: { home: { id: 33, name: 'Home FC' }, away: { id: 34, name: 'Away FC' } }
+    }]
+  });
+
+  nock(BASE).get('/fixtures').query({ team: '33', last: '4' }).reply(200, {
+    errors: [], response: [1, 2, 3, 4].map((i) => finished(i, 33, 90 + i))
+  });
+  nock(BASE).get('/fixtures').query({ team: '34', last: '4' }).reply(200, {
+    errors: [], response: [5, 6, 7, 8].map((i) => finished(i, 90 + i, 34))
+  });
+
+  for (const i of [1, 2, 3, 4]) cornerStats(i, 33, 6, 90 + i, 4);
+  for (const i of [5, 6, 7, 8]) cornerStats(i, 34, 5, 90 + i, 5);
+
+  nock(BASE).get('/odds').query({ fixture: '500' }).reply(200, {
+    errors: [],
+    response: [{
+      bookmakers: [{
+        name: 'Bet365',
+        bets: [{
+          name: 'Corners Over Under',
+          values: [{ value: 'Over 9.5', odd: String(BEST_PRICE) },
+            { value: 'Under 9.5', odd: String(BEST_PRICE) }]
+        }]
+      }]
+    }]
+  });
+}
+
 function prediction(overrides = {}) {
   return {
-    fixture: { id: 500, league: 'Primeira Liga', home: 'Home FC', away: 'Away FC',
-      kickoff: '2026-08-22T19:00:00+00:00' },
+    fixtureId: 500,
     market: { family: 'corners', selection: 'over', line: 9.5 },
-    baseline: { probability: 0.58, empiricalRate: 0.5, empiricalSample: 10, lambda: 9.9,
-      dispersionRatio: 1.4, caveats: ['no league normalisation'] },
-    marketView: { consensusProbability: 0.54, bestPrice: 1.95, bookmaker: 'Bet365', overround: 0.045 },
+    matchCount: 4,
     agent: { probability: 0.62, confidence: 'medium', divergenceReason: 'both keepers punt long',
       stake: 1 },
     ...overrides
@@ -35,11 +105,17 @@ function prediction(overrides = {}) {
 }
 
 test.beforeEach(() => {
+  nock.cleanAll();
+  process.env.API_FOOTBALL_KEY = 'test-key-123';
   process.env.MCP_LEDGER_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-ledger-'));
+  // Without this the suite would write into the real cache beside the server.
+  process.env.MCP_CACHE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-ledger-cache-'));
+  stubScenario();
 });
 
 test.afterEach(() => {
   fs.rmSync(process.env.MCP_LEDGER_DIR, { recursive: true, force: true });
+  fs.rmSync(process.env.MCP_CACHE_DIR, { recursive: true, force: true });
 });
 
 test('append writes one JSON line into the month file', () => {
@@ -121,7 +197,7 @@ test('a divergence from the baseline without a reason is refused', async () => {
 
 test('agreeing with the baseline needs no reason', async () => {
   const p = prediction();
-  p.agent.probability = 0.58;             // exactly the baseline
+  p.agent.probability = DERIVED_OVER;     // exactly the derived baseline
   delete p.agent.divergenceReason;
 
   const result = await handlers().get('record_prediction').handler(p);
@@ -131,12 +207,72 @@ test('agreeing with the baseline needs no reason', async () => {
 
 test('a divergence inside the threshold needs no reason', async () => {
   const p = prediction();
-  p.agent.probability = 0.60;             // 0.02 from the baseline's 0.58
+  p.agent.probability = DERIVED_OVER + 0.02;
   delete p.agent.divergenceReason;
 
   const result = await handlers().get('record_prediction').handler(p);
 
   assert.ok(!result.isError, result.content[0].text);
+});
+
+// The whole reason record_prediction was changed. A caller used to hand in the
+// baseline as text, and a run on 2026-08-18 quietly tidied the duplicated venue
+// caveats out of what it wrote — harmless in itself, and proof that the number
+// the entire record rests on was editable in transit.
+test('a baseline supplied by the caller is ignored in favour of the derived one', async () => {
+  const p = prediction();
+  p.baseline = {
+    probability: 0.99, empiricalRate: 0.99, empiricalSample: 999,
+    lambda: 99, dispersionRatio: 1, caveats: ['nothing to worry about here']
+  };
+  p.marketView = { consensusProbability: 0.99, bestPrice: 50, bookmaker: 'Invented', overround: 0 };
+
+  const result = await handlers().get('record_prediction').handler(p);
+
+  assert.ok(!result.isError, result.content[0].text);
+  const [stored] = store.readAll();
+
+  assert.strictEqual(stored.baseline.probability, DERIVED_OVER, 'the derived probability wins');
+  assert.strictEqual(stored.baseline.lambda, 10);
+  assert.strictEqual(stored.marketView.bestPrice, BEST_PRICE);
+  assert.strictEqual(stored.marketView.bookmaker, 'Bet365');
+  assert.ok(stored.baseline.caveats.some((c) => /league normalisation/.test(c)),
+    'the real caveats are recorded, not the flattering ones');
+  assert.ok(!stored.baseline.caveats.includes('nothing to worry about here'));
+});
+
+test('the derived record is echoed back so the caller can check it', async () => {
+  const result = await handlers().get('record_prediction').handler(prediction());
+
+  const body = JSON.parse(result.content[0].text);
+  assert.strictEqual(body.baseline.probability, DERIVED_OVER);
+  assert.strictEqual(body.marketView.bestPrice, BEST_PRICE);
+});
+
+test('an under records the under side of both the baseline and the market', async () => {
+  const p = prediction({ market: { family: 'corners', selection: 'under', line: 9.5 } });
+  p.agent.probability = DERIVED_UNDER;
+  delete p.agent.divergenceReason;
+
+  const result = await handlers().get('record_prediction').handler(p);
+
+  assert.ok(!result.isError, result.content[0].text);
+  const [stored] = store.readAll();
+  assert.strictEqual(stored.baseline.probability, DERIVED_UNDER);
+});
+
+test('a selection nobody quotes is refused rather than recorded without a price', async () => {
+  // The scenario quotes 9.5 only. A baseline exists for 8.5, but no price does,
+  // and a prediction with no price has no edge.
+  const p = prediction({ market: { family: 'corners', selection: 'over', line: 8.5 } });
+  delete p.agent.divergenceReason;
+  p.agent.probability = 0.7;
+
+  const result = await handlers().get('record_prediction').handler(p);
+
+  assert.strictEqual(result.isError, true);
+  assert.match(result.content[0].text, /quotes line 8\.5|no bookmaker/i);
+  assert.deepStrictEqual(store.readAll(), []);
 });
 
 test('a prediction with no agent probability is refused', async () => {

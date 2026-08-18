@@ -51,6 +51,7 @@ A key already exported in the environment also works and takes precedence over `
 - `get_goals_baseline` — The same for total goals, but the rate is estimated from shots on target × a pooled conversion rather than from goals scored: goals are the noisy outcome, shots the repeatable process. Check `signal` (`"shots"`, or `"goals"` when coverage was too thin to use them) and `comparison`, which carries what the goals-based model would have said. The empirical rate and dispersion are always computed from real goals, so they stay an independent check. Costs one request per match per team, usually already paid by the corner profile over the same matches.
 - `get_market_probabilities` — Market's implied probabilities for one family (`corners` or `goals`), with the bookmaker margin removed. Reads the full-match total only.
 - `evaluate_bet` — Pure arithmetic on a probability and a price: implied probability, edge, and expected value.
+- `suggest_stake` — Sizes a bet: fractional Kelly capped at one unit, scaled down by what the baseline says about its own inputs (sample size, dispersion, model-versus-sample agreement, venue fallbacks, season boundaries, one-sided quotes). Derives the baseline itself. Returns every penalty and why, and 0 when the price does not cover the probability. Exists because stake size drives P&L and was the one lever nothing measured.
 
 ## Market Families
 
@@ -59,7 +60,7 @@ A family is declared once, in `markets/index.js`: its odds market name, where it
 | Family | Count source | Cost per baseline | Odds market name |
 |---|---|---|---|
 | `corners` | `fixtures/statistics` → Corner Kicks | ~1 request per match per team | `Corners Over Under` |
-| `goals` | the fixture's own score | 1 request per team | `Goals Over/Under` |
+| `goals` | shots on target × pooled conversion; goals for the empirical check | ~1 request per match per team, usually already paid by corners | `Goals Over/Under` |
 
 Both market names were read off a real API response, not assumed, and both patterns are anchored: the same response carries `Goals Over/Under First Half`, `Goal Line`, `Home Corners Over/Under` and a dozen other near-misses that are different bets.
 
@@ -68,9 +69,9 @@ Adding a totals family is a registry entry plus its count source. A family with 
 Scores are only comparable **within** a family, and each needs its own 30 settled predictions before `get_ledger_summary` returns a verdict rather than `insufficient`. Pass `market` to score one family.
 
 ### Ledger Tools (Task 12)
-- `record_prediction` — Writes one prediction to the append-only ledger before kickoff.
+- `record_prediction` — Writes one prediction to the append-only ledger before kickoff. You pass the fixture, the selection and your own judgment; the baseline, market view, edge and expected value are DERIVED here rather than copied from what you read, so nothing in the record depends on a transcription. The result echoes back what was written.
 - `grade_pending_predictions` — Grades every prediction whose match has finished (idempotent).
-- `get_ledger_summary` — Scores the agent's probabilities against the baseline's: Brier, calibration, and P&L.
+- `get_ledger_summary` — Scores the agent against the baseline AND against the de-vigged market consensus, which is the harder benchmark: Brier, log loss, calibration by band, P&L. Also reports `judgment`, which measures how far the agent actually moves from the baseline — if the typical prediction just restates it, the comparison is measuring nothing and this says so — and `blend.weight`, the model weight that would have scored best in hindsight, fitted in sample and deliberately not applied.
 
 ## Configuration
 
@@ -82,9 +83,9 @@ The daily bulletin procedure is configured via `config/bulletin.json` at the rep
 - `minEdge` — Minimum edge threshold for a selection to be included in the bulletin.
 - `maxPicks` — Maximum number of picks per bulletin.
 - `stakeFraction` — Stake as a fraction of the configured bankroll.
-- `matchCount` — Number of recent finished matches per team for corner profile analysis.
+- `matchCount` — Number of recent finished matches per team behind each baseline.
 - `runHour` — Hour of day (UTC) to run the bulletin procedure.
-- `lines` — Market lines (half-integers) to price in baselines.
+- `lines` — Market lines (half-integers) to price, keyed by family: `lines.corners` and `lines.goals`.
 
 ## Ledger
 

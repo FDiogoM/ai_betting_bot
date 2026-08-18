@@ -1,92 +1,21 @@
 'use strict';
 
 const { z } = require('zod');
-const provider = require('../provider/apiFootball');
-const cache = require('../cache');
-const aggregate = require('../aggregate/cornerProfile');
-const goalsAggregate = require('../aggregate/goalsProfile');
-const { cornerBaseline, DEFAULT_LINES } = require('../baselines/corners');
-const { goalsBaseline } = require('../baselines/goals');
-const devig = require('../baselines/devig');
-const { parseQuotes } = require('../aggregate/marketOdds');
+const fixtureBaseline = require('../baselines/fixtureBaseline');
+const { marketViewFor, selectionView } = require('../aggregate/marketView');
 const markets = require('../markets');
 const { evaluate } = require('../baselines/value');
+const { suggestStake } = require('../baselines/staking');
 const { run } = require('../result');
 
 const forceRefresh = z.boolean().optional()
   .describe('Bypass the cache and refetch. Costs requests against the daily quota.');
 
-async function resolveFixture(fixtureId, force) {
-  const found = await provider.fetch(provider.ENDPOINTS.FIXTURES,
-    { id: fixtureId }, cache.TTL.LIVE, force);
-  if (!found.length) throw new Error(`fixture ${fixtureId} was not found`);
-  const f = found[0];
-  return {
-    id: f.fixture.id,
-    kickoff: f.fixture.date,
-    league: f.league ? f.league.name : null,
-    leagueId: f.league ? f.league.id : null,
-    // Undefined, not a guessed year, when the response carries none — this
-    // flows straight into cornerBaseline's currentSeason, and an unknown
-    // season must read as unknown, not as a fabricated "this season".
-    season: f.league ? f.league.season : undefined,
-    home: f.teams.home.name,
-    homeId: f.teams.home.id,
-    away: f.teams.away.name,
-    awayId: f.teams.away.id
-  };
-}
-
-// Per line: every bookmaker's de-vigged view, the median of those views, and
-// the best price on each side. `consensus` is null when the line is quoted on
-// one side only — de-vigging needs both, and inventing the other side would
-// manufacture a probability nobody quoted.
-function summariseLine(quote) {
-  const perBook = new Map();
-  for (const side of ['over', 'under']) {
-    for (const q of quote[side]) {
-      if (!perBook.has(q.bookmaker)) perBook.set(q.bookmaker, { bookmaker: q.bookmaker });
-      perBook.get(q.bookmaker)[side] = q.odd;
-    }
-  }
-
-  const bookmakers = [];
-  const fairOvers = [];
-  const overrounds = [];
-  for (const book of perBook.values()) {
-    if (book.over === undefined || book.under === undefined) {
-      bookmakers.push({ ...book, fairOverProbability: null });
-      continue;
-    }
-    const [fairOver] = devig.fairProbabilities([book.over, book.under]);
-    fairOvers.push(fairOver);
-    overrounds.push(devig.overround([book.over, book.under]));
-    bookmakers.push({ ...book, fairOverProbability: Math.round(fairOver * 1e4) / 1e4 });
-  }
-
-  const round = (n) => Math.round(n * 1e4) / 1e4;
-
-  return {
-    line: quote.line,
-    bookmakers,
-    consensus: fairOvers.length ? {
-      overProbability: round(devig.median(fairOvers)),
-      underProbability: round(1 - devig.median(fairOvers))
-    } : null,
-    overround: overrounds.length ? round(devig.median(overrounds)) : null,
-    bestPrice: {
-      over: quote.over.length ? devig.bestPrice(quote.over) : null,
-      under: quote.under.length ? devig.bestPrice(quote.under) : null
-    }
-  };
-}
-
-// Both baselines are the same tool with a different count behind them: resolve
-// the fixture, profile each team, run the Poisson, report the profiles beside
-// it. Writing it once means a family cannot drift into a subtly different
-// contract, and the differences that are real — where the count comes from,
-// what it costs, which lines are standard — stay declared rather than implied.
+// Both baselines are the same tool with a different count behind them. The work
+// itself lives in baselines/fixtureBaseline.js, so record_prediction can derive
+// the same numbers rather than being handed a transcription of them.
 function registerBaselineTool(server, spec) {
+  const shared = fixtureBaseline.spec(spec.family);
   server.registerTool(
     spec.name,
     {
@@ -94,43 +23,18 @@ function registerBaselineTool(server, spec) {
       description: spec.description,
       inputSchema: {
         fixtureId: z.number().int().positive().describe('Fixture ID of the upcoming match.'),
-        matchCount: z.number().int().min(1).max(spec.maxMatchCount)
-          .default(spec.defaultMatchCount)
-          .describe(`Recent finished matches per team (default ${spec.defaultMatchCount}, `
-            + `max ${spec.maxMatchCount}).`),
+        matchCount: z.number().int().min(1).max(shared.maxMatchCount)
+          .default(shared.defaultMatchCount)
+          .describe(`Recent finished matches per team (default ${shared.defaultMatchCount}, `
+            + `max ${shared.maxMatchCount}).`),
         lines: z.array(z.number()).optional()
-          .describe(`Market lines to price. Defaults to ${spec.defaultLines.join(', ')}.`),
+          .describe(`Market lines to price. Defaults to ${shared.defaultLines.join(', ')}.`),
         forceRefresh
       }
     },
     async ({ fixtureId, matchCount, lines, forceRefresh }) =>
-      run(`${spec.name}(${fixtureId})`, async () => {
-        const fixture = await resolveFixture(fixtureId, forceRefresh);
-
-        // Sequential, not parallel: a statistics-backed profile already runs
-        // its fetches at a concurrency of 3, and each checks the per-call
-        // ceiling against a cache the other is still filling.
-        //
-        // Each profile enforces the ceiling for its own team, so a baseline is
-        // bounded by twice MCP_MAX_REQUESTS_PER_CALL rather than once. That is
-        // still a bound, and a combined pre-count would need an extra fixtures
-        // request per team to compute.
-        const homeProfile = await spec.profile(fixture.homeId, matchCount, forceRefresh);
-        const awayProfile = await spec.profile(fixture.awayId, matchCount, forceRefresh);
-
-        const baseline = spec.compute(homeProfile, awayProfile, lines || spec.defaultLines,
-          { currentSeason: fixture.season });
-
-        return {
-          fixture,
-          market: spec.family,
-          ...baseline,
-          profiles: {
-            home: { matchesAnalyzed: homeProfile.matchesAnalyzed, averages: homeProfile.averages },
-            away: { matchesAnalyzed: awayProfile.matchesAnalyzed, averages: awayProfile.averages }
-          }
-        };
-      })
+      run(`${spec.name}(${fixtureId})`, () =>
+        fixtureBaseline.baselineFor(spec.family, fixtureId, matchCount, lines, forceRefresh))
   );
 }
 
@@ -145,12 +49,7 @@ function register(server) {
       + 'parametric probability and declares its own simplifications in `caveats` — read them, '
       + 'especially `sampleSeasons` early in a season when recent matches may predate it. '
       + 'This is arithmetic, not a recommendation: it has no view on whether the price is worth '
-      + 'taking.',
-    profile: aggregate.cornerProfile,
-    compute: cornerBaseline,
-    defaultLines: DEFAULT_LINES,
-    defaultMatchCount: aggregate.DEFAULT_MATCH_COUNT,
-    maxMatchCount: aggregate.MAX_MATCH_COUNT
+      + 'taking.'
   });
 
   registerBaselineTool(server, {
@@ -167,12 +66,7 @@ function register(server) {
       + 'remain an independent check on the model. Costs one request per match per team like the '
       + 'corner baseline, but usually spends nothing extra: the corner profile has already '
       + 'fetched those same statistics and finished matches are cached permanently. '
-      + 'Arithmetic, not a recommendation.',
-    profile: goalsAggregate.goalsProfile,
-    compute: goalsBaseline,
-    defaultLines: markets.get('goals').defaultLines,
-    defaultMatchCount: goalsAggregate.DEFAULT_MATCH_COUNT,
-    maxMatchCount: goalsAggregate.MAX_MATCH_COUNT
+      + 'Arithmetic, not a recommendation.'
   });
 
   server.registerTool(
@@ -197,16 +91,64 @@ function register(server) {
       // caller — a test, or another tool — gets the same corner default here
       // rather than an "unknown market family undefined".
       const family = market || 'corners';
-      return run(`get_market_probabilities(${fixtureId}, ${family})`, async () => {
-        const odds = await provider.fetch(provider.ENDPOINTS.ODDS,
-          { fixture: fixtureId }, cache.TTL.ODDS, forceRefresh);
-
-        const quotes = parseQuotes(family, odds);
-        if (!quotes.length) return null; // run() reports this as an explicit empty result
-
-        return { fixtureId, market: family, lines: quotes.map(summariseLine) };
-      });
+      // run() reports a null return as an explicit empty result.
+      return run(`get_market_probabilities(${fixtureId}, ${family})`,
+        () => marketViewFor(family, fixtureId, forceRefresh));
     }
+  );
+
+  server.registerTool(
+    'suggest_stake',
+    {
+      title: 'Size a bet from its price and the quality of its evidence',
+      description: 'Fractional Kelly on your probability and the best price, capped at one unit, '
+        + 'then scaled down by what the baseline says about its own inputs — sample size, '
+        + 'dispersion, whether the model and the sample agree, venue fallbacks, season '
+        + 'boundaries, one-sided quotes. It derives the baseline itself rather than trusting a '
+        + 'copy. Use it instead of choosing a stake by feel: a stake chosen by feel is the one '
+        + 'lever in this system that moves P&L and that nothing measures. It returns every '
+        + 'penalty it applied and why, so you can disagree with it in the open — and 0 when the '
+        + 'price does not cover the probability, which means do not bet rather than bet small.',
+      inputSchema: {
+        fixtureId: z.number().int().positive().describe('Fixture ID of the upcoming match.'),
+        market: z.object({
+          family: z.enum(markets.FAMILY_NAMES),
+          selection: z.enum(['over', 'under']),
+          line: z.number().describe('Half-integer market line.')
+        }),
+        probability: z.number().gt(0).lt(1).describe('YOUR probability for this selection.'),
+        matchCount: z.number().int().min(1).max(20).optional()
+          .describe('Pass the same value you used for the baseline.'),
+        bankrollFraction: z.number().gt(0).max(1).optional()
+          .describe('What one unit means as a fraction of bankroll. Defaults to 0.01, matching '
+            + 'stakeFraction in config/bulletin.json.')
+      }
+    },
+    async ({ fixtureId, market, probability, matchCount, bankrollFraction }) =>
+      run(`suggest_stake(${fixtureId})`, async () => {
+        const baseline = await fixtureBaseline.baselineFor(
+          market.family, fixtureId, matchCount, [market.line], false);
+        const priced = fixtureBaseline.lineOf(baseline, market.line);
+        const view = await marketViewFor(market.family, fixtureId, false);
+        const selection = selectionView(view, market.line, market.selection);
+
+        return suggestStake({
+          probability,
+          decimalOdd: selection.bestPrice,
+          baseline: {
+            probability: market.selection === 'over'
+              ? priced.overProbability : priced.underProbability,
+            empiricalRate: market.selection === 'over'
+              ? priced.empiricalOverRate : 1 - priced.empiricalOverRate,
+            empiricalSample: priced.empiricalSample,
+            dispersionRatio: baseline.dispersion.ratio,
+            signal: baseline.signal,
+            caveats: baseline.caveats
+          },
+          marketView: selection,
+          bankrollFraction
+        });
+      })
   );
 
   server.registerTool(

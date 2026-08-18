@@ -11,6 +11,8 @@ const aggregate = require('../aggregate/cornerProfile');
 const goalsAggregate = require('../aggregate/goalsProfile');
 const markets = require('../markets');
 const scoring = require('../ledger/scoring');
+const fixtureBaseline = require('../baselines/fixtureBaseline');
+const marketView = require('../aggregate/marketView');
 
 const VOID_STATUSES = new Set(['ABD', 'CANC', 'PST', 'AWD', 'WO']);
 
@@ -82,46 +84,31 @@ function register(server) {
     'record_prediction',
     {
       title: 'Record a prediction before kickoff',
-      description: 'Writes one prediction to the append-only ledger. Your own probability is '
-        + 'required, and if it differs from the baseline by more than '
-        + `${DIVERGENCE_THRESHOLD} you must supply divergenceReason — the write is refused `
-        + 'otherwise. Edge and expected value are computed here, not by you.',
-      // Cross-field rules (the divergence requirement) cannot live in this
-      // per-key map, so the full object is validated inside the handler and a
-      // failure becomes an error result via run().
+      description: 'Writes one prediction to the append-only ledger. You supply the fixture, the '
+        + 'selection, and your own judgment; the baseline, the market view, the edge and the '
+        + 'expected value are DERIVED here from the same tools you just called — not copied from '
+        + 'what you read. That is deliberate: a transcribed baseline is a number nobody can '
+        + 'check, and the whole record rests on it. The result echoes back what was actually '
+        + 'written, so compare it against what you had in front of you. Your probability is '
+        + `required, and if it differs from the derived baseline by more than ${DIVERGENCE_THRESHOLD} `
+        + 'you must supply divergenceReason — the write is refused otherwise.',
+      // You supply what only you can supply — the fixture, the selection, and
+      // your own judgment. Everything else is derived here. Cross-field rules
+      // (the divergence requirement) cannot live in this per-key map, so the
+      // assembled object is validated in the handler and a failure becomes an
+      // error result via run().
       inputSchema: {
-        fixture: z.object({
-          id: z.number().int().positive(),
-          league: z.string().nullable().optional(),
-          home: z.string(),
-          away: z.string(),
-          kickoff: z.string().describe('ISO kickoff time.')
-        }),
+        fixtureId: z.number().int().positive().describe('Fixture ID of the upcoming match.'),
         market: z.object({
           family: z.enum(markets.FAMILY_NAMES)
             .describe(`Market family: ${markets.FAMILY_NAMES.join(' or ')}.`),
           selection: z.enum(['over', 'under']),
           line: z.number().describe('Half-integer market line, e.g. 9.5 for corners, 2.5 for goals.')
         }),
-        baseline: z.object({
-          probability: z.number(),
-          empiricalRate: z.number(),
-          empiricalSample: z.number().int(),
-          lambda: z.number(),
-          dispersionRatio: z.number().nullable(),
-          signal: z.string().optional()
-            .describe('The baseline\'s `signal` field, verbatim — "shots" or "goals". Copy it '
-              + 'whenever the baseline reports one: it is what lets the two models be scored '
-              + 'against each other later.'),
-          caveats: z.array(z.string())
-        }).describe('Copy this from the baseline tool for this family (get_corner_baseline or '
-          + 'get_goals_baseline), for the line you are backing.'),
-        marketView: z.object({
-          consensusProbability: z.number().nullable(),
-          bestPrice: z.number(),
-          bookmaker: z.string(),
-          overround: z.number().nullable()
-        }).describe('Copy this from get_market_probabilities.'),
+        matchCount: z.number().int().min(1).max(20).optional()
+          .describe('Recent matches per team behind the baseline. Pass the SAME value you used '
+            + 'when you called the baseline tool, or the derived baseline will not be the one '
+            + 'you reasoned about.'),
         agent: z.object({
           probability: z.number().describe('Your probability for this selection.'),
           confidence: z.enum(['low', 'medium', 'high'])
@@ -132,9 +119,47 @@ function register(server) {
         })
       }
     },
-    async (input) =>
+    async ({ fixtureId, market, matchCount, agent }) =>
       run('record_prediction', async () => {
-        const value = predictionSchema.parse(input);
+        // Derived, never transcribed. Handing these in as text made the record
+        // whatever the caller typed: a run on 2026-08-18 silently tidied the
+        // duplicated venue caveats out of what it wrote, which was harmless and
+        // proved the record was editable in transit. Everything below reads
+        // from the same cache the baseline tools just filled, so this costs
+        // arithmetic rather than requests.
+        const baseline = await fixtureBaseline.baselineFor(
+          market.family, fixtureId, matchCount, [market.line], false);
+
+        const priced = fixtureBaseline.lineOf(baseline, market.line);
+        const view = await marketView.marketViewFor(market.family, fixtureId, false);
+        const selection = marketView.selectionView(view, market.line, market.selection);
+
+        const value = predictionSchema.parse({
+          fixture: {
+            id: baseline.fixture.id,
+            league: baseline.fixture.league,
+            home: baseline.fixture.home,
+            away: baseline.fixture.away,
+            kickoff: baseline.fixture.kickoff
+          },
+          market,
+          baseline: {
+            probability: market.selection === 'over'
+              ? priced.overProbability : priced.underProbability,
+            // Side-specific, like the probability beside it: the empirical rate
+            // for an under is how often the total came in UNDER the line.
+            empiricalRate: market.selection === 'over'
+              ? priced.empiricalOverRate : 1 - priced.empiricalOverRate,
+            empiricalSample: priced.empiricalSample,
+            lambda: baseline.lambda.total,
+            dispersionRatio: baseline.dispersion.ratio,
+            signal: baseline.signal,
+            caveats: baseline.caveats
+          },
+          marketView: selection,
+          agent
+        });
+
         const id = predictionId(value);
 
         // Append-only means a duplicate cannot be corrected later, so it is
@@ -143,18 +168,26 @@ function register(server) {
           throw new Error(`${id} was already recorded; the ledger is append-only`);
         }
 
-        const priced = evaluate(value.agent.probability, value.marketView.bestPrice, value.agent.stake);
+        const evaluated = evaluate(value.agent.probability, value.marketView.bestPrice, value.agent.stake);
         const record = {
           type: 'prediction',
           id,
           recordedAt: new Date().toISOString(),
           ...value,
-          edge: priced.edge,
-          expectedValue: priced.expectedValue
+          edge: evaluated.edge,
+          expectedValue: evaluated.expectedValue
         };
 
         store.append(record);
-        return { id, edge: record.edge, expectedValue: record.expectedValue };
+        return {
+          id,
+          edge: record.edge,
+          expectedValue: record.expectedValue,
+          // Echoed back so the caller can see what was actually recorded rather
+          // than assume it matches what they had in front of them.
+          baseline: record.baseline,
+          marketView: record.marketView
+        };
       })
   );
 

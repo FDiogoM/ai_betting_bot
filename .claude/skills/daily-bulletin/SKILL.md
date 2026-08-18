@@ -36,8 +36,21 @@ yesterday's. Note `settled`, `stillPending` and any `failures` for the bulletin.
 
 Call `get_ledger_summary` three times: once with no filter for the overall
 picture, then once per family with `market: "corners"` and `market: "goals"`.
-Carry through, for each: agent Brier, baseline Brier, `verdict`, `verdictNote`,
-P&L in units, `n`, and the calibration bands.
+Carry through, for each: agent Brier, baseline Brier, **`marketConsensus.brier`**,
+`verdict`, `verdictNote`, P&L in units, `n`, and the calibration bands.
+
+**Read `judgment` before anything else.** It measures how much judgment is
+actually being exercised — median and maximum divergence from the baseline, how
+many predictions sat inside the 0.03 threshold, how many carried a reason. If
+its `note` says the typical prediction restates the baseline, put that in the
+bulletin: it means the comparison below it is measuring nothing, and no amount
+of further running will fix that on its own.
+
+**`marketConsensus` is the hard benchmark.** Beating a venue-split Poisson is
+easy; beating the de-vigged market is the thing that pays. `blend.weight` is the
+model weight that would have scored best in hindsight — near 0 says the market
+knows better, near 1 says the model does. It is fitted in sample and is not
+applied anywhere; report it, do not act on it.
 
 The per-family reading is the one that means something. Brier scores are only
 comparable within a family — goals lines sit at probabilities corners lines
@@ -123,6 +136,19 @@ baseline, disagree with it, or ignore it. Three rules:
    reasoning about team news, motivation or weather, stop: none of it is in the
    data, and none of it belongs in the record.
 
+**Agreeing with the baseline is a real answer. Nudging it is not.** On
+2026-08-18 seven predictions went in at a median of 0.021 below their baselines,
+every one just inside the threshold that would have demanded an explanation, at
+round numbers a shade under whatever the baseline said. That is not judgment —
+it is a constant shrinkage applied by hand, and it leaves the agent-versus-
+baseline comparison unable to separate the two however long it runs.
+
+So: if you have a concrete reason, say it and diverge properly. If you do not,
+**copy the baseline's number exactly**. A ledger of honest agreements is worth
+more than one of invented small differences, because it leaves the comparison
+able to answer its own question. `get_ledger_summary` now reports
+`judgment.medianAbsDivergence` and will say plainly when this slips again.
+
 Call `evaluate_bet` with your probability and the best price. Do not compute
 edge or expected value yourself.
 
@@ -134,16 +160,32 @@ with no value is information, not a malfunction.
 
 ## Step 9 — Record
 
-For each kept selection, call `record_prediction`, copying `baseline` from
-Step 5 and `marketView` from Step 6 for the exact line you are backing. Set
-`market.family` to `corners` or `goals` — it must match the baseline you
-copied, because it decides how the bet is settled later. Set `stake` in units
-(at most 1) and `confidence` from the input quality you assessed in Step 5.
+**Size it first.** Call `suggest_stake` with the fixture, the selection and your
+probability. It applies fractional Kelly capped at one unit, then scales by what
+the baseline says about its own inputs, and returns every penalty it applied.
+Use the number it gives you. You may override it, but only downward and only
+with a reason you would be willing to read back after the match — on 2026-08-18
+all seven picks went in at a full unit, including one built on nine matches with
+a dispersion ratio of 1.46, which was the weakest evidence of the day at the
+largest size available.
+
+Then call `record_prediction` with `fixtureId`, the `market` block, the same
+`matchCount` you used in Step 5, and your `agent` block. **You no longer pass
+the baseline or the market view** — it derives both itself from the same tools
+you just called, so what lands in the ledger is what the arithmetic produced
+rather than what you transcribed. Compare the echoed `baseline` and
+`marketView` in the result against what you had in front of you; if they differ,
+something is wrong and it is worth saying so in the bulletin.
 
 Never back both families on the same fixture without saying why in each
 reason. They are not independent: a match with more goals tends to have more
 corners, so two picks on one fixture is closer to one double-sized bet than to
 two bets.
+
+The same caution applies across a single evening. Five overs on one night of
+European qualifiers is closer to one large directional bet than to five, so if
+the day's picks lean one way, say so in the bulletin footer with the total
+units at risk.
 
 Skip this step entirely on a dry run.
 

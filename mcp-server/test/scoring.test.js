@@ -154,3 +154,114 @@ test('a sufficient sample gets a verdict on who scored better', () => {
   assert.strictEqual(s.verdict, 'agent-better');
   assert.ok(s.agent.brier < s.baseline.brier);
 });
+
+// --- the market as a third forecaster ---------------------------------------
+
+function scored(rows) {
+  const predictions = rows.map((r, i) => ({
+    type: 'prediction',
+    id: `p${i}`,
+    market: { family: 'corners' },
+    agent: { probability: r.agent, divergenceReason: r.reason },
+    baseline: { probability: r.baseline },
+    marketView: { consensusProbability: r.market === undefined ? null : r.market }
+  }));
+  const settlements = rows.map((r, i) => ({
+    type: 'settlement', predictionId: `p${i}`,
+    outcome: r.outcome ? 'win' : 'loss', returnUnits: r.outcome ? 1 : -1
+  }));
+  return scoring.summarise(predictions, settlements);
+}
+
+test('the market consensus is scored alongside the agent and the baseline', () => {
+  const s = scored([
+    { agent: 0.6, baseline: 0.55, market: 0.9, outcome: 1 },
+    { agent: 0.4, baseline: 0.45, market: 0.1, outcome: 0 }
+  ]);
+
+  // The market called both outcomes almost exactly; it must score better.
+  close(s.marketConsensus.brier, ((0.9 - 1) ** 2 + (0.1 - 0) ** 2) / 2, 'market brier');
+  assert.strictEqual(s.marketConsensus.n, 2);
+  assert.ok(s.marketConsensus.brier < s.agent.brier, 'the sharper forecaster must score better');
+});
+
+test('a one-sided line has no consensus and is left out of the market score', () => {
+  const s = scored([
+    { agent: 0.6, baseline: 0.55, market: 0.9, outcome: 1 },
+    { agent: 0.4, baseline: 0.45, outcome: 0 }        // no consensus
+  ]);
+
+  assert.strictEqual(s.n, 2, 'both are still scored for agent and baseline');
+  assert.strictEqual(s.marketConsensus.n, 1, 'only one carried a market probability');
+});
+
+test('the fitted blend weight leans to whichever forecaster was right', () => {
+  // The market is right and the baseline is wrong: the weight on the MODEL
+  // should collapse toward zero.
+  const marketKnows = scored([
+    { agent: 0.5, baseline: 0.2, market: 0.9, outcome: 1 },
+    { agent: 0.5, baseline: 0.8, market: 0.1, outcome: 0 },
+    { agent: 0.5, baseline: 0.2, market: 0.9, outcome: 1 }
+  ]);
+  assert.ok(marketKnows.blend.weight < 0.2,
+    `expected the weight to favour the market, got ${marketKnows.blend.weight}`);
+
+  // And the other way round.
+  const modelKnows = scored([
+    { agent: 0.5, baseline: 0.9, market: 0.2, outcome: 1 },
+    { agent: 0.5, baseline: 0.1, market: 0.8, outcome: 0 },
+    { agent: 0.5, baseline: 0.9, market: 0.2, outcome: 1 }
+  ]);
+  assert.ok(modelKnows.blend.weight > 0.8,
+    `expected the weight to favour the model, got ${modelKnows.blend.weight}`);
+
+  // Fitted in sample, and said so, on a sample far too small to act on.
+  assert.match(modelKnows.blend.note, /should not be acted on/);
+});
+
+// --- the judgment-size diagnostic -------------------------------------------
+
+test('a run that restates the baseline is reported as such', () => {
+  // Seven predictions hugging the baseline, none far enough to need a reason.
+  const s = scored([0.6078, 0.5305, 0.5311, 0.6276, 0.5576, 0.5824, 0.7241].map((b, i) => ({
+    baseline: b,
+    agent: b - 0.01,
+    market: 0.5,
+    outcome: i % 2
+  })));
+
+  assert.strictEqual(s.judgment.n, 7);
+  assert.strictEqual(s.judgment.insideThreshold, 7);
+  assert.strictEqual(s.judgment.withReason, 0);
+  assert.match(s.judgment.note, /inside the 0\.03 threshold|no prediction has yet/);
+});
+
+test('two considered disagreements do not make a rubber-stamping run look healthy', () => {
+  // The shape of the first nine real predictions: two large divergences with
+  // reasons, seven rubber stamps. The MEAN absolute divergence clears the
+  // threshold; the median does not, and the median is what decides.
+  const rows = [
+    { baseline: 0.6614, agent: 0.5133, market: 0.41, outcome: 1, reason: 'no league normalisation' },
+    { baseline: 0.5218, agent: 0.4386, market: 0.38, outcome: 1, reason: 'same gap, other way' }
+  ];
+  for (const b of [0.6078, 0.5305, 0.5311, 0.6276, 0.5576, 0.5824, 0.7241]) {
+    rows.push({ baseline: b, agent: b - 0.01, market: 0.5, outcome: 0 });
+  }
+
+  const s = scored(rows);
+
+  assert.ok(s.judgment.meanAbsDivergence > 0.03, 'the mean is pulled above the threshold');
+  assert.ok(s.judgment.medianAbsDivergence <= 0.03, 'the median is not');
+  assert.strictEqual(s.judgment.withReason, 2);
+  assert.match(s.judgment.note, /typical prediction restates the baseline/);
+});
+
+test('real disagreement is not reported as rubber-stamping', () => {
+  const s = scored([
+    { baseline: 0.60, agent: 0.45, market: 0.4, outcome: 1, reason: 'a' },
+    { baseline: 0.55, agent: 0.70, market: 0.6, outcome: 0, reason: 'b' },
+    { baseline: 0.50, agent: 0.62, market: 0.5, outcome: 1, reason: 'c' }
+  ]);
+
+  assert.match(s.judgment.note, /taking positions the baseline does not/);
+});

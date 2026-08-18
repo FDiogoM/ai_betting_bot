@@ -11,7 +11,7 @@ const markets = require('../markets');
 const { goalsBaseline } = require('../baselines/goals');
 const { goalsProfile } = require('../aggregate/goalsProfile');
 const { parseQuotes } = require('../aggregate/marketOdds');
-const { predictionSchema } = require('../ledger/schema');
+const { predictionSchema, predictionId } = require('../ledger/schema');
 const store = require('../ledger/store');
 const baselines = require('../tools/baselines');
 const ledgerTools = require('../tools/ledger');
@@ -372,11 +372,24 @@ test('a whole line is refused for goals too, because it can push', () => {
 
 // --- settlement -------------------------------------------------------------
 
+// Settlement tests write the prediction straight into the store. Going through
+// record_prediction would mean standing up an entire baseline derivation —
+// fixtures, statistics, odds — to get one row into the ledger, and none of that
+// is what these tests are about.
+function alreadyRecorded(family, line) {
+  const value = predictionInput(family, line);
+  store.append({
+    type: 'prediction',
+    id: predictionId(value),
+    recordedAt: '2026-08-22T09:00:00.000Z',
+    ...value
+  });
+}
+
 test('a goals prediction settles from the fixture score, with its own observed key', async () => {
   const tools = handlers(ledgerTools);
 
-  const recorded = await tools.get('record_prediction').handler(predictionInput('goals', 2.5));
-  assert.ok(!recorded.isError, recorded.content[0].text);
+  alreadyRecorded('goals', 2.5);
 
   // 2-1 clears 2.5. Again no statistics interceptor: settling goals must not
   // reach for the statistics endpoint the way corners do.
@@ -399,7 +412,7 @@ test('a goals prediction settles from the fixture score, with its own observed k
 
 test('a finished match with no score is void, not graded as under', async () => {
   const tools = handlers(ledgerTools);
-  await tools.get('record_prediction').handler(predictionInput('goals', 2.5));
+  alreadyRecorded('goals', 2.5);
 
   nock(BASE).get('/fixtures').query({ id: '700' }).reply(200, {
     errors: [],
