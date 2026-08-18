@@ -59,14 +59,29 @@ played.
 
 Two market families are built: **corners** and **goals**. For each fixture,
 call both `get_corner_baseline` and `get_goals_baseline` with `matchCount` from
-the configuration. Pass `lines` from the configuration to the corner baseline;
-let the goals baseline use its own defaults, because the configured corner
-lines (7.5 to 12.5) are meaningless for goals.
+the configuration, and pass each family its own lines: `lines.corners` to the
+corner baseline, `lines.goals` to the goals one. The two sets are not
+interchangeable — 7.5 to 12.5 is meaningless for goals — so never pass one
+family's lines to the other's baseline.
 
-The two cost wildly different amounts. A corner baseline needs one request per
-match per team — roughly twenty. A goals baseline needs one request per team,
-because goals are already on the fixture. If the budget from Step 1 is tight,
-cut corner baselines first and keep the goals ones: they are nearly free.
+**Order matters for cost.** Both families now read the same per-match
+statistics — corners for the corner count, goals for shots on target — so call
+`get_corner_baseline` FIRST. Finished matches are cached permanently, so the
+goals baseline that follows spends almost nothing on the same fixture. Called
+the other way round the total is the same; called on a fixture where you skip
+corners, the goals baseline pays the full per-match cost itself.
+
+**Read `signal` on the goals baseline.** `"shots"` means the rate came from
+shots on target scaled by a pooled conversion — the intended path, and the less
+noisy one. `"goals"` means coverage was too thin and it fell back to the older
+goal-rate model; that is weaker evidence and belongs in your `confidence`.
+When the signal is `shots`, `comparison` carries what the goals-based model
+would have said. A wide gap between the two is worth a sentence in your
+reasoning: it means recent scoring has been running ahead of or behind the
+underlying shot volume.
+
+Copy `signal` into `baseline.signal` when you record the prediction. It is what
+lets the two models be scored against each other later.
 
 Everything below about caveats and dispersion applies to both.
 

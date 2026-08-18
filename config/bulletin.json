@@ -15,7 +15,10 @@
   "minEdge": 0.03,
   "maxPicks": 8,
   "stakeFraction": 0.01,
-  "matchCount": 10,
+  "matchCount": 14,
   "runHour": 9,
-  "lines": [7.5, 8.5, 9.5, 10.5, 11.5, 12.5]
+  "lines": {
+    "corners": [7.5, 8.5, 9.5, 10.5, 11.5, 12.5],
+    "goals": [0.5, 1.5, 2.5, 3.5, 4.5]
+  }
 }

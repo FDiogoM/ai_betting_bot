@@ -6,7 +6,7 @@
 $ErrorActionPreference = 'Stop'
 
 $root      = Split-Path -Parent $PSScriptRoot
-$serverDir = Join-Path $root 'radar-sport-api-master\mcp-server'
+$serverDir = Join-Path $root 'mcp-server'
 $envFile   = Join-Path $root '.env'
 $template  = Join-Path $root '.env.example'
 

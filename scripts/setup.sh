@@ -7,7 +7,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-server_dir="$root/radar-sport-api-master/mcp-server"
+server_dir="$root/mcp-server"
 env_file="$root/.env"
 template="$root/.env.example"
 
