@@ -270,10 +270,22 @@ The page carries, in this order:
 4. A footer: fixtures analysed, fixtures skipped and why, grading results from
    Step 2, and the quota reading from Step 1.
 
-Then send a push notification with one line — picks count, top edge, and the
-link.
+Then call `send_telegram_digest` with the artifact URL. It composes the message
+from the LEDGER rather than from anything you type — the same rule
+`record_prediction` follows, and the phone is where these numbers actually get
+read, so a figure retyped on the way there is the one nobody would ever check.
+It leads with a staleness warning when the server is running old code, calls out
+a day whose picks all point the same way, and carries the record beside them.
 
-Skip this step entirely on a dry run; report what you would have published.
+On a dry run pass `dryRun: true`. It composes and returns the exact message
+without sending, which is the point of a dry run: you see what would have gone
+out.
+
+If it reports `configured: false`, the bot token or chat id is missing from
+`.env` — say so in the bulletin footer and carry on. The artifact is published
+either way; Telegram is delivery, not the record.
+
+Skip publishing entirely on a dry run; report what you would have published.
 
 ## Step 11 — Commit the ledger
 

@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__football-stats__get_api_status",
+      "mcp__football-stats__search_leagues",
+      "mcp__football-stats__search_teams",
+      "mcp__football-stats__get_fixtures",
+      "mcp__football-stats__get_team_fixtures",
+      "mcp__football-stats__get_fixture",
+      "mcp__football-stats__get_head_to_head",
+      "mcp__football-stats__get_standings",
+      "mcp__football-stats__get_fixture_statistics",
+      "mcp__football-stats__get_team_season_statistics",
+      "mcp__football-stats__get_team_corner_profile",
+      "mcp__football-stats__get_odds",
+      "mcp__football-stats__get_corner_baseline",
+      "mcp__football-stats__get_goals_baseline",
+      "mcp__football-stats__get_cards_baseline",
+      "mcp__football-stats__get_fixture_context",
+      "mcp__football-stats__get_market_probabilities",
+      "mcp__football-stats__evaluate_bet",
+      "mcp__football-stats__evaluate_multiple",
+      "mcp__football-stats__suggest_stake",
+      "mcp__football-stats__record_prediction",
+      "mcp__football-stats__grade_pending_predictions",
+      "mcp__football-stats__get_ledger_summary",
+      "mcp__football-stats__simulate_strategies",
+      "mcp__football-stats__send_telegram_digest",
+
+      "Bash(git add ledger/*)",
+      "Bash(git commit -m *)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)"
+    ]
+  }
+}
