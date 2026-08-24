@@ -55,6 +55,10 @@ async function resolveFixture(fixtureId, force) {
   return {
     id: f.fixture.id,
     kickoff: f.fixture.date,
+    // Present on every fixture response since the first commit and never read
+    // until 2026-08-24. Null when the appointment has not been made yet.
+    referee: f.fixture.referee || null,
+    venue: f.fixture.venue ? f.fixture.venue.name : null,
     league: f.league ? f.league.name : null,
     leagueId: f.league ? f.league.id : null,
     // Undefined, not a guessed year, when the response carries none — this

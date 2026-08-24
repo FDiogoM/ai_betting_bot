@@ -165,9 +165,23 @@ baseline, disagree with it, or ignore it. Three rules:
    that names something concrete — a venue sample, a dispersion ratio, a
    head-to-head, a schedule. "Feels high" is not a reason and
    `record_prediction` will reject the write without one.
-3. Never invent an input the tools did not give you. If you find yourself
-   reasoning about team news, motivation or weather, stop: none of it is in the
-   data, and none of it belongs in the record.
+3. **Use only what you can point at.** Any fact you can name and that could
+   later be shown to be wrong is fair game: a referee's card average over a
+   stated number of matches, days of rest, what competition a side plays next,
+   what happened in the last six meetings. Call `get_fixture_context` for these
+   and put the figure in your reason, not the impression it gave you.
+
+   What stays out is what you cannot point at. Motivation, whether a manager
+   will rotate, how a crowd will be, what a team "needs" from the game. Those
+   are not information — they are a guess wearing the clothes of analysis, and
+   they are the failure this system is least able to detect.
+
+   The old rule here said "never invent an input the tools did not give you",
+   and used the referee as an example of an invention. It was wrong: the
+   referee's name arrives on every fixture response and had simply never been
+   read. The test is **auditable**, not "a tool happened to return it" — and
+   when the auditable thing is missing, the answer is to go and measure it
+   rather than to guess it or to pretend it does not matter.
 
 **Agreeing with the baseline is a real answer. Nudging it is not.** On
 2026-08-18 seven predictions went in at a median of 0.021 below their baselines,

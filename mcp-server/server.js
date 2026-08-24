@@ -20,6 +20,7 @@ const ledger = require('./tools/ledger');
 const notify = require('./tools/notify');
 const multiples = require('./tools/multiples');
 const simulate = require('./tools/simulate');
+const fixtureContext = require('./tools/context');
 
 const server = new McpServer({ name: 'football-stats', version: '0.1.0' });
 
@@ -32,6 +33,7 @@ ledger.register(server);
 notify.register(server);
 multiples.register(server);
 simulate.register(server);
+fixtureContext.register(server);
 
 async function main() {
   // stdout is the MCP transport. Diagnostics must go to stderr or they
