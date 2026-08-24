@@ -53,7 +53,19 @@ function classify(err, path) {
 
   const status = err && err.response ? err.response.status : null;
   if (status === 429) {
-    return new ApiError(`Daily request quota exhausted (${path}). Check get_api_status; the quota resets at midnight UTC.`, { status });
+    // The provider returns 429 for BOTH ceilings and the body distinguishes
+    // them. Saying "daily quota exhausted" to a per-minute throttle sends the
+    // reader to the wrong number — a dry run on 2026-08-24 hit this with 7000
+    // requests still available that day.
+    const body = err.response && err.response.data ? JSON.stringify(err.response.data) : '';
+    if (/per minute|rateLimit/i.test(body)) {
+      return new ApiError(`Rate limited per MINUTE (${path}), not out of daily budget. `
+        + 'This resets within the minute. If it repeats, another process is spending against the '
+        + 'same key: the pace limiter counts one process and the provider counts them all.',
+      { status, perMinute: true });
+    }
+    return new ApiError(`Daily request quota exhausted (${path}). Check get_api_status; `
+      + 'the quota resets at midnight UTC.', { status });
   }
   if (status === 401 || status === 403) {
     return new ApiError(`API key rejected (${path}). Verify API_FOOTBALL_KEY is valid and your plan covers this endpoint.`, { status });
@@ -91,7 +103,9 @@ async function request(path, params = {}) {
 
   // The provider states its own per-minute ceiling on every response. Trusting
   // it beats trusting a default that was right when it was written.
-  rateLimit.shared.observe(numericHeader(res.headers, 'x-ratelimit-limit'));
+  rateLimit.shared.observe(
+    numericHeader(res.headers, 'x-ratelimit-limit'),
+    numericHeader(res.headers, 'x-ratelimit-remaining'));
 
   const problem = describeErrors(res.data && res.data.errors);
   if (problem) {

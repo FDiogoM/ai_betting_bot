@@ -72,13 +72,30 @@ function createLimiter(options = {}) {
     }
   }
 
-  // Learns the real ceiling from a response and tightens to it. The provider
-  // knows its own plan better than a default does, and a plan can change under
-  // a running process.
-  function observe(perMinuteLimit) {
-    if (!Number.isFinite(perMinuteLimit) || perMinuteLimit <= 0) return;
-    const target = Math.max(1, Math.floor(perMinuteLimit * OBSERVED_SAFETY));
-    if (target !== limit) limit = target;
+  // Learns from a response: the ceiling, and how much of it is actually left.
+  //
+  // The `remaining` half exists because the window above is PER PROCESS and the
+  // provider's limit is PER KEY. A dry run on 2026-08-24 hit the ceiling anyway:
+  // the MCP server and a script were both spending against the same key, each
+  // counting only itself, and neither ever saw a full window. The header is the
+  // only figure that accounts for all of them.
+  //
+  // So a low `remaining` back-fills the local window with phantom stamps until
+  // it matches what the provider says is left. The next acquire() then waits on
+  // its own arithmetic, and no second mechanism is needed.
+  function observe(perMinuteLimit, perMinuteRemaining) {
+    if (Number.isFinite(perMinuteLimit) && perMinuteLimit > 0) {
+      const target = Math.max(1, Math.floor(perMinuteLimit * OBSERVED_SAFETY));
+      if (target !== limit) limit = target;
+    }
+
+    if (!Number.isFinite(perMinuteRemaining) || perMinuteRemaining < 0) return;
+    const at = now();
+    prune(at);
+    const shouldBeUsed = Math.max(0, limit - perMinuteRemaining);
+    // Only ever tightens. A high `remaining` from a stale response must not
+    // hand back slots this process knows it has spent.
+    while (stamps.length < shouldBeUsed) stamps.push(at);
   }
 
   function state() {

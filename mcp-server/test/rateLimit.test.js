@@ -218,3 +218,42 @@ test('the environment can override the idle timeout', () => {
 
   delete process.env.MCP_IDLE_TIMEOUT_MS;
 });
+
+// The window above counts one process; the provider counts every process using
+// the key. A dry run on 2026-08-24 hit the ceiling with the limiter in place,
+// because the MCP server and a script were each counting only themselves. The
+// header is the only figure that accounts for both.
+test('a low remaining from the provider tightens the local window', async () => {
+  const clock = fakeClock();
+  const limiter = rateLimit.createLimiter({ perMinute: 10, now: clock.now, sleep: clock.sleep });
+
+  await limiter.acquire();
+  assert.strictEqual(limiter.state().remainingInWindow, 9, 'this process has spent one');
+
+  // The provider says only two are left: somebody else spent the rest.
+  limiter.observe(null, 2);
+
+  assert.strictEqual(limiter.state().remainingInWindow, 2,
+    'the local window must believe the provider over its own count');
+});
+
+test('a high remaining never hands back slots this process knows it spent', async () => {
+  const clock = fakeClock();
+  const limiter = rateLimit.createLimiter({ perMinute: 10, now: clock.now, sleep: clock.sleep });
+
+  for (let i = 0; i < 8; i += 1) await limiter.acquire();
+  limiter.observe(null, 9);   // stale response claiming plenty left
+
+  assert.strictEqual(limiter.state().remainingInWindow, 2,
+    'observe only ever tightens');
+});
+
+test('an exhausted remaining makes the next request wait', async () => {
+  const clock = fakeClock();
+  const limiter = rateLimit.createLimiter({ perMinute: 10, now: clock.now, sleep: clock.sleep });
+
+  limiter.observe(null, 0);
+  await limiter.acquire();
+
+  assert.strictEqual(clock.slept.length, 1, 'it must wait rather than fire into a full window');
+});
