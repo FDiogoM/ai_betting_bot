@@ -6,6 +6,8 @@ const cornerAggregate = require('../aggregate/cornerProfile');
 const goalsAggregate = require('../aggregate/goalsProfile');
 const { cornerBaseline } = require('./corners');
 const { goalsBaseline } = require('./goals');
+const cardAggregate = require('../aggregate/cardProfile');
+const { cardsBaseline } = require('./cards');
 const markets = require('../markets');
 const { derivedMarkets } = require('./derived');
 
@@ -29,6 +31,13 @@ const SPECS = {
     compute: goalsBaseline,
     defaultMatchCount: goalsAggregate.DEFAULT_MATCH_COUNT,
     maxMatchCount: goalsAggregate.MAX_MATCH_COUNT
+  },
+  cards: {
+    family: 'cards',
+    profile: cardAggregate.cardProfile,
+    compute: cardsBaseline,
+    defaultMatchCount: cardAggregate.DEFAULT_MATCH_COUNT,
+    maxMatchCount: cardAggregate.MAX_MATCH_COUNT
   }
 };
 

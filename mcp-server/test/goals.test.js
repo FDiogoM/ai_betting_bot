@@ -362,8 +362,28 @@ test('the ledger still accepts a corners prediction', () => {
   assert.strictEqual(parsed.market.family, 'corners');
 });
 
+// This named `cards` until 2026-08-24, when cards were built and it started
+// passing for the wrong reason — which is the test doing its job. `fouls` and
+// `offsides` are quoted by the feed and have no family here, so they are the
+// next things a caller might reasonably assume exist.
 test('a family nobody has built is refused at the schema, not recorded', () => {
-  assert.throws(() => predictionSchema.parse(predictionInput('cards', 4.5)));
+  assert.throws(() => predictionSchema.parse(predictionInput('fouls', 10.5)));
+  assert.throws(() => predictionSchema.parse(predictionInput('offsides', 3.5)));
+});
+
+test('cards ARE built and validate like any other totals family', () => {
+  const parsed = predictionSchema.parse(predictionInput('cards', 4.5));
+  assert.strictEqual(parsed.market.family, 'cards');
+  assert.strictEqual(parsed.market.line, 4.5);
+});
+
+test('a quarter line and a whole line are both refused on cards', () => {
+  // The feed quotes 2.75 and 3.0 on Yellow Over/Under. One splits the stake
+  // across two lines and the other pushes; the ledger has win, loss and void,
+  // and a push is not a void — one carries information about the forecast and
+  // the other does not.
+  assert.throws(() => predictionSchema.parse(predictionInput('cards', 2.75)));
+  assert.throws(() => predictionSchema.parse(predictionInput('cards', 3)));
 });
 
 test('a whole line is refused for goals too, because it can push', () => {

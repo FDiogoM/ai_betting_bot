@@ -62,6 +62,31 @@ const FAMILIES = {
   }
 };
 
+FAMILIES.cards = {
+  family: 'cards',
+  shape: 'totals',
+  noun: 'yellow cards',
+  observedKey: 'totalYellows',
+  source: 'statistics',
+  statType: 'Yellow Cards',
+  // Half-integers only, as everywhere else. The feed also quotes 2.75 and 3.0
+  // on this market: a quarter line splits the stake across two lines and a
+  // whole line pushes when the total lands on it, and neither is representable
+  // in a ledger whose outcomes are win, loss and void. A push is not a void —
+  // one carries information about the forecast and the other does not — so
+  // recording them as the same thing would corrupt the scoring rather than
+  // extend it. The existing half-line guard drops both.
+  defaultLines: [2.5, 3.5, 4.5, 5.5, 6.5],
+  // Confirmed by live probe (2026-08-24) against fixture 1557376, which carried
+  // 185 distinct markets. The full-match yellow total is named exactly "Yellow
+  // Over/Under". The same response also carries "Yellow Over/Under (1st Half)",
+  // "Yellow Over/Under (2nd Half)", "Yellow Asian Handicap", "Yellow Cards 1x2",
+  // "Yellow Double Chance", "Yellow Odd/Even", "Cards Over/Under",
+  // "Cards Asian Handicap", "Home Team Yellow Cards" and "Away Team Total
+  // Cards" — every one of them a different bet.
+  oddsPattern: /^yellow\s+over\s*\/?\s*under$/i
+};
+
 // --- the outcomes shape ------------------------------------------------------
 //
 // A second shape, exactly as this file's opening comment anticipated: a fixed

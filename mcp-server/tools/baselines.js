@@ -69,6 +69,22 @@ function register(server) {
       + 'Arithmetic, not a recommendation.'
   });
 
+  registerBaselineTool(server, {
+    name: 'get_cards_baseline',
+    family: 'cards',
+    title: 'Get the yellow-card baseline for a fixture',
+    description: 'A deterministic yellow-card baseline for one upcoming fixture. Same arithmetic '
+      + 'as corners — each team\'s cards-for blended with the opponent\'s cards-against, split by '
+      + 'venue, into a Poisson expectation. YELLOWS ONLY: the wider Cards Over/Under market needs '
+      + 'reds as well, and reds are recorded on only a quarter of the matches that carry yellows, '
+      + 'so it cannot be settled reliably and a family that settles wrongly is worse than one that '
+      + 'does not exist. Yellows have the best coverage of any statistic in the response at 97.1%, '
+      + 'and across 1089 cached matches average 4.09 a game with a dispersion ratio of 1.11 — '
+      + 'closer to the Poisson assumption than corners manage. Costs nothing extra on a fixture '
+      + 'whose corner profile is already built: the counts come from the same cached response. '
+      + 'Arithmetic, not a recommendation.'
+  });
+
   server.registerTool(
     'get_market_probabilities',
     {

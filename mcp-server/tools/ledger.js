@@ -9,6 +9,8 @@ const provider = require('../provider/apiFootball');
 const cache = require('../cache');
 const aggregate = require('../aggregate/cornerProfile');
 const goalsAggregate = require('../aggregate/goalsProfile');
+const cardAggregate = require('../aggregate/cardProfile');
+const matchStats = require('../aggregate/matchStats');
 const markets = require('../markets');
 const scoring = require('../ledger/scoring');
 const fixtureBaseline = require('../baselines/fixtureBaseline');
@@ -28,6 +30,17 @@ const OBSERVERS = {
     const entries = await aggregate.fetchStatistics(fixture.fixture.id, false, cache.TTL.PERMANENT);
     const home = aggregate.cornerValue(entries, fixture.teams.home.id);
     const away = aggregate.cornerValue(entries, fixture.teams.away.id);
+    return home === null || away === null ? null : home + away;
+  },
+  // Yellows arrive in the same statistics response corners already fetched, so
+  // settling a card bet on a fixture that also carried a corner bet costs
+  // nothing beyond arithmetic. A missing count is null and stays null: coerced
+  // to zero it would settle every under as a winner.
+  cards: async (fixture) => {
+    const entries = await matchStats.fetchStatistics(
+      fixture.fixture.id, false, cache.TTL.PERMANENT);
+    const home = cardAggregate.cardValue(entries, fixture.teams.home.id);
+    const away = cardAggregate.cardValue(entries, fixture.teams.away.id);
     return home === null || away === null ? null : home + away;
   },
   goals: async (fixture) => {
