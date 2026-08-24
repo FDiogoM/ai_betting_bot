@@ -134,3 +134,39 @@ test('an upstream failure is returned as a tool error, never thrown', async () =
   assert.strictEqual(result.isError, true);
   assert.match(result.content[0].text, /quota/i);
 });
+
+// The staleness report is the reason get_api_status is worth calling at the top
+// of every run. It must therefore survive the provider being down — a warning
+// that vanishes on the days the network is bad is missing when it is most
+// needed, and a stale process does not heal itself while the API is offline.
+test('a provider outage does not take the server status down with it', async () => {
+  nock(BASE).get('/status').reply(503, {});
+
+  const server = fakeServer();
+  reference.register(server);
+  const result = await server.tools.get('get_api_status').handler({});
+
+  assert.ok(!result.isError, 'the call reports the outage rather than becoming one');
+  const body = JSON.parse(result.content[0].text);
+
+  assert.strictEqual(body.account, null);
+  assert.match(body.accountError, /unavailable|503/i, 'the outage is named, not swallowed');
+  assert.ok(body.server, 'and the server status still arrives');
+  assert.strictEqual(body.server.stale, false);
+  assert.ok(body.server.loadedFingerprint, 'with something to identify the running code by');
+});
+
+test('get_api_status carries the server fingerprint alongside the quota', async () => {
+  nock(BASE).get('/status').reply(200, {
+    errors: [],
+    response: { subscription: { plan: 'Pro' }, requests: { current: 678, limit_day: 7500 } }
+  });
+
+  const server = fakeServer();
+  reference.register(server);
+  const body = JSON.parse((await server.tools.get('get_api_status').handler({})).content[0].text);
+
+  assert.strictEqual(body.server.version, '0.1.0');
+  assert.strictEqual(body.server.stale, false);
+  assert.match(body.server.note, /matches the source on disk/);
+});

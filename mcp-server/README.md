@@ -27,7 +27,7 @@ A key already exported in the environment also works and takes precedence over `
 ## Registered Tools
 
 ### Reference Tools (Task 2)
-- `get_api_status` — Reports the API plan, requests used today, and remaining requests.
+- `get_api_status` — Reports the API plan, requests used today, and remaining requests, plus `server`: version, uptime, and whether this process is running code older than the repository. An MCP server over stdio loads its code once and never notices the disk moving on, so `server.stale` is the only way to tell from the outside. It is computed before the network call and survives a provider outage, because a warning that disappears when the API does is missing when it is most needed.
 - `search_leagues` — Finds leagues by name and returns their IDs and available seasons.
 - `search_teams` — Finds teams by name and returns their IDs.
 

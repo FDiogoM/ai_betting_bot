@@ -22,10 +22,24 @@ run.
 
 ## Step 1 — Check the budget
 
-Call `get_api_status`. Record plan and remaining requests; they go in the
-bulletin's footer. If remaining requests are fewer than
-`maxPicks × 2 × matchCount`, say so in the bulletin and reduce the number of
-fixtures you analyse rather than failing halfway through.
+Call `get_api_status`.
+
+**Read `server.stale` first, before the quota.** An MCP server over stdio loads
+its code once and never notices the repository moving on, so a process started
+before a change keeps serving the old behaviour indefinitely. When `stale` is
+true, the tools you are about to call are NOT the tools this procedure
+describes: fields will be missing, shapes will differ, and nothing else about
+the run will look wrong. Put it at the top of the bulletin, unmissable, tell the
+owner to restart the MCP server, and treat every output shape below with
+suspicion. This happened on 2026-08-21 and cost that day's `judgment` and
+`marketConsensus` readings.
+
+Then record plan and remaining requests; they go in the bulletin's footer. If
+remaining requests are fewer than `maxPicks × 2 × matchCount`, say so in the
+bulletin and reduce the number of fixtures you analyse rather than failing
+halfway through. If `accountError` is set the provider is unreachable — the
+`server` block still arrived, but the budget did not, so fall through to
+*Failure handling* at the end of this document.
 
 ## Step 2 — Grade what has played
 
@@ -176,6 +190,16 @@ you just called, so what lands in the ledger is what the arithmetic produced
 rather than what you transcribed. Compare the echoed `baseline` and
 `marketView` in the result against what you had in front of you; if they differ,
 something is wrong and it is worth saying so in the bulletin.
+
+**A refusal reading "was already recorded; the ledger is append-only" is
+expected, not an anomaly.** `windowHours` is 48 and this runs daily, so every
+fixture more than a day out is seen twice and yesterday's picks come round
+again. The guard is doing its job. Count the selection as already held, say so
+in one line in the footer, and move on — **never** shift to a neighbouring line
+to get the write through. That would turn one position into two on the same
+match, which is the correlation this procedure spends a paragraph avoiding, and
+it would be doing it to defeat a safeguard rather than because the line was
+worth backing.
 
 Never back both families on the same fixture without saying why in each
 reason. They are not independent: a match with more goals tends to have more
