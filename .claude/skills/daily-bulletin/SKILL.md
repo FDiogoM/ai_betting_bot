@@ -136,6 +136,25 @@ fixture cannot be bet: skip that family and count it as skipped. A line whose
 but you have no market probability to test yourself against, so treat it as
 weaker evidence.
 
+**The price is not the best price in the market — it is the best price YOU can
+take.** `MCP_BOOKMAKERS` names the books an account is held with, and
+`bestPrice` comes only from those while `consensus` still comes from all of
+them. That split is deliberate: you compare your probability against what the
+whole market thinks, and measure your edge against the money actually on the
+table.
+
+It matters more than it sounds. Measured across 49 selections on one fixture,
+the restricted book paid on average 10.1% less than the best available, and on
+one line — over 3.5 goals — 3.00 against 4.50. A probability of 0.30 is a +7.8%
+edge at the first price and **−3.3%** at the second. Predictions recorded before
+2026-08-24 used the unrestricted best price and their edges are optimistic; the
+`marketView.execution` field on each record says which regime it was written
+under.
+
+A selection your books do not quote is one you cannot back. `record_prediction`
+refuses it and says so, distinguishing "nobody prices this" from "nobody you can
+reach prices this" — count it as skipped in the footer.
+
 ## Step 7 — Judge
 
 For each line worth considering, decide YOUR probability. You may agree with the

@@ -62,10 +62,21 @@ const predictionSchema = z.object({
     caveats: z.array(z.string())
   }),
   marketView: z.object({
+    // From every book quoting the market: the market's opinion.
     consensusProbability: z.number().gt(0).lt(1).nullable(),
+    // From the books an account is held with: the price actually takeable.
     bestPrice: z.number().gt(1),
     bookmaker: z.string(),
-    overround: z.number().nullable()
+    overround: z.number().nullable(),
+    // Which books were allowed to supply that price when this was written.
+    // Optional so the 34 predictions recorded before the distinction existed
+    // still validate — and reported precisely so they can be told apart, since
+    // 26 of them carry a price from a book the operator cannot use and their
+    // edge was therefore measured against money never on the table.
+    execution: z.object({
+      restrictedTo: z.array(z.string()).nullable(),
+      note: z.string().optional()
+    }).optional()
   }),
   agent: z.object({
     // Required, always. A pick without a number cannot be scored, and an

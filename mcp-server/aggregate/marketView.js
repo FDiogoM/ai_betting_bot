@@ -4,6 +4,7 @@ const provider = require('../provider/apiFootball');
 const cache = require('../cache');
 const devig = require('../baselines/devig');
 const { parseQuotes, parseOutcomes } = require('./marketOdds');
+const books = require('../bookmakers');
 
 // The market's own opinion on one fixture, de-vigged. Extracted from the
 // get_market_probabilities handler for the same reason the baseline was:
@@ -40,6 +41,15 @@ function summariseLine(quote) {
     bookmakers.push({ ...book, fairOverProbability: round(fairOver) });
   }
 
+  // The consensus above was computed from every book quoting the line, which is
+  // right: the market's opinion is best estimated from all of it. The price
+  // below comes only from books an account is held with, which is also right,
+  // and for the opposite reason — it is the only money actually on the table.
+  // These were the same thing until 2026-08-24, and 26 of 34 recorded
+  // predictions carry a price the operator could not have taken.
+  const usableOver = books.usable(quote.over);
+  const usableUnder = books.usable(quote.under);
+
   return {
     line: quote.line,
     bookmakers,
@@ -49,9 +59,13 @@ function summariseLine(quote) {
     } : null,
     overround: overrounds.length ? round(devig.median(overrounds)) : null,
     bestPrice: {
-      over: quote.over.length ? devig.bestPrice(quote.over) : null,
-      under: quote.under.length ? devig.bestPrice(quote.under) : null
-    }
+      over: usableOver.length ? devig.bestPrice(usableOver) : null,
+      under: usableUnder.length ? devig.bestPrice(usableUnder) : null
+    },
+    // How many of YOUR books quote each side, as opposed to how many exist. A
+    // line the whole market prices and yours does not is a line you cannot back,
+    // and that was invisible while the best price came from anywhere.
+    quotedByUsable: { over: usableOver.length, under: usableUnder.length }
   };
 }
 
@@ -100,11 +114,15 @@ function summariseOutcomes(family, bySelection) {
   const selections = {};
   for (const s of spec.selections) {
     const quotes = bySelection[s];
+    const takeable = books.usable(quotes);
     selections[s] = {
+      // From everyone: the market's opinion.
       consensusProbability: fairBySelection[s].length
         ? round(devig.median(fairBySelection[s])) : null,
-      bestPrice: quotes.length ? devig.bestPrice(quotes) : null,
-      bookmakers: quotes.length
+      // From your books only: the price you can take.
+      bestPrice: takeable.length ? devig.bestPrice(takeable) : null,
+      bookmakers: quotes.length,
+      quotedByUsable: takeable.length
     };
   }
 
@@ -136,6 +154,18 @@ async function marketViewFor(family, fixtureId, forceRefresh) {
   return { fixtureId, market: family, shape: 'totals', lines: quotes.map(summariseLine) };
 }
 
+// A selection nobody you can bet with has priced. Names the restriction,
+// because "nobody quotes this" and "your book does not quote this" are very
+// different problems and only the second is fixable by opening an account.
+function unquoted(what, quotedByAnyone) {
+  const allowed = books.configured();
+  if (!allowed) return `nobody quotes "${what}" on this fixture`;
+  return quotedByAnyone
+    ? `"${what}" is quoted by ${quotedByAnyone} bookmaker(s) but none of yours (${allowed.join(', ')}), `
+      + 'so there is no price you can take'
+    : `nobody quotes "${what}" on this fixture`;
+}
+
 /**
  * The market's view of one selection, in the shape the ledger records.
  *
@@ -151,12 +181,13 @@ function selectionView(view, line, selection) {
       throw new Error(`"${selection}" is not a selection of ${view.market}; `
         + `it offers ${Object.keys(view.selections).join(', ')}`);
     }
-    if (!priced.bestPrice) throw new Error(`nobody quotes "${selection}" on this fixture`);
+    if (!priced.bestPrice) throw new Error(unquoted(selection, priced.bookmakers));
     return {
       consensusProbability: priced.consensusProbability,
       bestPrice: priced.bestPrice.odd,
       bookmaker: priced.bestPrice.bookmaker,
-      overround: view.overround
+      overround: view.overround,
+      execution: books.restriction()
     };
   }
 
@@ -167,7 +198,7 @@ function selectionView(view, line, selection) {
   }
 
   const best = priced.bestPrice[selection];
-  if (!best) throw new Error(`line ${line} is not quoted on the ${selection} side`);
+  if (!best) throw new Error(unquoted(`${selection} ${line}`, priced.bookmakers.length));
 
   return {
     consensusProbability: priced.consensus
@@ -175,7 +206,10 @@ function selectionView(view, line, selection) {
       : null,
     bestPrice: best.odd,
     bookmaker: best.bookmaker,
-    overround: priced.overround
+    overround: priced.overround,
+    // What was in force when this was read, carried so a ledger spanning a
+    // change of regime can still be told apart.
+    execution: books.restriction()
   };
 }
 
