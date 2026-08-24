@@ -47,8 +47,13 @@ async function settle(prediction) {
   const fixture = found[0];
   const status = fixture.fixture.status.short;
   const spec = markets.get(prediction.market.family);
+  // A totals family needs an observer to read its count off the fixture. An
+  // outcomes family does not: it settles from the score with the predicate the
+  // registry declares, checked below.
   const observe = OBSERVERS[spec.family];
-  if (!observe) throw new Error(`no settlement rule for market family "${spec.family}"`);
+  if (spec.shape === 'totals' && !observe) {
+    throw new Error(`no settlement rule for market family "${spec.family}"`);
+  }
 
   const settlement = {
     type: 'settlement',
@@ -62,16 +67,35 @@ async function settle(prediction) {
   if (VOID_STATUSES.has(status)) return voided;
   if (!provider.isFinished(fixture)) return null;
 
-  const total = await observe(fixture);
-  if (total === null) return voided;
+  let won;
+  let observed;
 
-  const cleared = total > prediction.market.line;
-  const won = prediction.market.selection === 'over' ? cleared : !cleared;
+  if (spec.shape === 'outcomes') {
+    // Every outcomes family settles from the final score, so there is one
+    // observation and the family's own predicate decides. Nothing here knows
+    // what "win to nil" means; markets/index.js does, which is where the
+    // knowledge belongs and where a new family adds itself.
+    const home = goalsAggregate.goalsOf(fixture.goals ? fixture.goals.home : null);
+    const away = goalsAggregate.goalsOf(fixture.goals ? fixture.goals.away : null);
+    // A finished match with no score recorded is void, never resolved by
+    // treating a missing goal as zero — that would settle every "no" and every
+    // clean sheet as a winner.
+    if (home === null || away === null) return voided;
+    observed = { score: `${home}-${away}`, home, away };
+    won = markets.settles(spec.family, prediction.market.selection, { home, away });
+  } else {
+    const total = await observe(fixture);
+    if (total === null) return voided;
+    observed = { [spec.observedKey]: total };
+    const cleared = total > prediction.market.line;
+    won = prediction.market.selection === 'over' ? cleared : !cleared;
+  }
+
   const stake = prediction.agent.stake;
 
   return {
     ...settlement,
-    observed: { [spec.observedKey]: total },
+    observed,
     outcome: won ? 'win' : 'loss',
     returnUnits: won
       ? Math.round(stake * (prediction.marketView.bestPrice - 1) * 1e6) / 1e6
@@ -101,9 +125,16 @@ function register(server) {
         fixtureId: z.number().int().positive().describe('Fixture ID of the upcoming match.'),
         market: z.object({
           family: z.enum(markets.FAMILY_NAMES)
-            .describe(`Market family: ${markets.FAMILY_NAMES.join(' or ')}.`),
-          selection: z.enum(['over', 'under']),
-          line: z.number().describe('Half-integer market line, e.g. 9.5 for corners, 2.5 for goals.')
+            .describe(`Market family. Totals (a line and over/under): `
+              + `${markets.TOTALS_FAMILIES.join(', ')}. Named selections and no line: `
+              + `${markets.OUTCOME_FAMILY_NAMES.join(', ')}.`),
+          selection: z.string()
+            .describe('"over" or "under" for a totals family; otherwise the family\'s own '
+              + 'selection, such as home/draw/away or yes/no. The exact set is validated '
+              + 'against the family, so a wrong one is refused rather than recorded.'),
+          line: z.number().optional()
+            .describe('Half-integer line, for a totals family only. A market with named '
+              + 'selections has no line and must not be given one.')
         }),
         matchCount: z.number().int().min(1).max(20).optional()
           .describe('Recent matches per team behind the baseline. Pass the SAME value you used '
@@ -127,12 +158,27 @@ function register(server) {
         // proved the record was editable in transit. Everything below reads
         // from the same cache the baseline tools just filled, so this costs
         // arithmetic rather than requests.
+        const isTotals = markets.get(market.family).shape === 'totals';
         const baseline = await fixtureBaseline.baselineFor(
-          market.family, fixtureId, matchCount, [market.line], false);
+          market.family, fixtureId, matchCount,
+          isTotals ? [market.line] : undefined, false);
 
-        const priced = fixtureBaseline.lineOf(baseline, market.line);
         const view = await marketView.marketViewFor(market.family, fixtureId, false);
         const selection = marketView.selectionView(view, market.line, market.selection);
+
+        // A totals bet is scored against the line it was priced at; an outcomes
+        // bet against the score matrix. The empirical rate exists only for the
+        // first — there is no "how often did this sample clear the line" for a
+        // 1X2 — and a fabricated one would be worse than its absence, so it is
+        // reported as the baseline's own probability, which is what it is.
+        const priced = isTotals ? fixtureBaseline.lineOf(baseline, market.line) : null;
+        const baselineProbability = isTotals
+          ? (market.selection === 'over' ? priced.overProbability : priced.underProbability)
+          : baseline.probabilities[market.selection];
+
+        if (typeof baselineProbability !== 'number') {
+          throw new Error(`the ${market.family} baseline does not price "${market.selection}"`);
+        }
 
         const value = predictionSchema.parse({
           fixture: {
@@ -144,13 +190,16 @@ function register(server) {
           },
           market,
           baseline: {
-            probability: market.selection === 'over'
-              ? priced.overProbability : priced.underProbability,
+            probability: baselineProbability,
             // Side-specific, like the probability beside it: the empirical rate
-            // for an under is how often the total came in UNDER the line.
-            empiricalRate: market.selection === 'over'
-              ? priced.empiricalOverRate : 1 - priced.empiricalOverRate,
-            empiricalSample: priced.empiricalSample,
+            // for an under is how often the total came in UNDER the line. An
+            // outcomes family has no line to have cleared, so it records the
+            // parametric probability rather than inventing a sample rate.
+            empiricalRate: isTotals
+              ? (market.selection === 'over'
+                ? priced.empiricalOverRate : 1 - priced.empiricalOverRate)
+              : baselineProbability,
+            empiricalSample: isTotals ? priced.empiricalSample : baseline.sample.pooled,
             lambda: baseline.lambda.total,
             dispersionRatio: baseline.dispersion.ratio,
             signal: baseline.signal,

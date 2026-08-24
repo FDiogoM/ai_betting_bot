@@ -62,7 +62,131 @@ const FAMILIES = {
   }
 };
 
+// --- the outcomes shape ------------------------------------------------------
+//
+// A second shape, exactly as this file's opening comment anticipated: a fixed
+// set of named selections and no line. Everything below was read off a live
+// response for Fulham v Chelsea on 2026-08-24 — both the market name and the
+// literal strings the bookmaker uses for each selection — because neither can
+// be guessed and getting either wrong backs a different bet without erroring.
+//
+// Each family declares three things nothing else may know: what the market is
+// called, what each selection is called in the odds feed, and how to tell from
+// a finished score whether it won. `won` is a predicate rather than a function
+// returning the winning selection, because more than one can win at once —
+// every result makes two of the three double chances good.
+
+const outcomes = (spec) => ({ ...spec, shape: 'outcomes' });
+
+const OUTCOME_FAMILIES = {
+  matchResult: outcomes({
+    family: 'matchResult',
+    noun: 'match result',
+    selections: ['home', 'draw', 'away'],
+    // Exactly one of the three happens, so the true probabilities sum to 1 and
+    // the book can be normalised to it.
+    partitionSum: 1,
+    // `Home/Away` is Draw No Bet and `First Half Winner` is a different match:
+    // the anchor keeps both out.
+    oddsPattern: /^match\s+winner$/i,
+    oddsValues: { home: 'Home', draw: 'Draw', away: 'Away' },
+    observedKey: 'score',
+    won: (s, o) => (s === 'home' ? o.home > o.away : s === 'away' ? o.away > o.home : o.home === o.away),
+    from: (d) => ({ home: d.matchResult.home, draw: d.matchResult.draw, away: d.matchResult.away })
+  }),
+  doubleChance: outcomes({
+    family: 'doubleChance',
+    noun: 'double chance',
+    selections: ['homeOrDraw', 'homeOrAway', 'drawOrAway'],
+    // NOT a partition. Every result makes exactly TWO of the three good, so the
+    // true probabilities sum to 2. Normalising to 1 reported a 112% margin on a
+    // live book — the probe that caught it is why this field exists.
+    partitionSum: 2,
+    // The same response carries `Double Chance - First Half`, `Corners. Double
+    // Chance`, `Yellow Double Chance`, `Fouls. Double Chance` and `Offsides
+    // Double Chance`. Five different bets sharing two words.
+    oddsPattern: /^double\s+chance$/i,
+    oddsValues: { homeOrDraw: 'Home/Draw', homeOrAway: 'Home/Away', drawOrAway: 'Draw/Away' },
+    observedKey: 'score',
+    won: (s, o) => (s === 'homeOrDraw' ? o.home >= o.away
+      : s === 'drawOrAway' ? o.away >= o.home : o.home !== o.away),
+    from: (d) => ({ homeOrDraw: d.doubleChance.homeOrDraw,
+      homeOrAway: d.doubleChance.homeOrAway, drawOrAway: d.doubleChance.awayOrDraw })
+  }),
+  bothTeamsScore: outcomes({
+    family: 'bothTeamsScore',
+    noun: 'both teams to score',
+    selections: ['yes', 'no'],
+    partitionSum: 1,
+    // Named `Both Teams Score` at full match; the half variants are spelled
+    // `Both Teams To Score`, with the extra word, and are different bets.
+    oddsPattern: /^both\s+teams\s+score$/i,
+    oddsValues: { yes: 'Yes', no: 'No' },
+    observedKey: 'score',
+    won: (s, o) => ((o.home > 0 && o.away > 0) === (s === 'yes')),
+    from: (d) => ({ yes: d.bothTeamsToScore.yes, no: d.bothTeamsToScore.no })
+  }),
+  oddEven: outcomes({
+    family: 'oddEven',
+    noun: 'odd or even total goals',
+    selections: ['odd', 'even'],
+    partitionSum: 1,
+    // Anchored hard: `Home Odd/Even`, `Away Odd/Even`, `Corners. Odd/Even`,
+    // `Yellow Odd/Even`, `Fouls. Odd/Even` and `Odd/Even - First Half` all
+    // exist on the same fixture.
+    oddsPattern: /^odd\s*\/\s*even$/i,
+    oddsValues: { odd: 'Odd', even: 'Even' },
+    observedKey: 'score',
+    won: (s, o) => (((o.home + o.away) % 2 === 1) === (s === 'odd')),
+    from: (d) => ({ odd: d.oddEven.odd, even: d.oddEven.even })
+  }),
+  cleanSheetHome: outcomes({
+    family: 'cleanSheetHome',
+    noun: 'home clean sheet',
+    selections: ['yes', 'no'],
+    partitionSum: 1,
+    oddsPattern: /^clean\s+sheet\s*-\s*home$/i,
+    oddsValues: { yes: 'Yes', no: 'No' },
+    observedKey: 'score',
+    won: (s, o) => ((o.away === 0) === (s === 'yes')),
+    from: (d) => ({ yes: d.cleanSheet.home, no: 1 - d.cleanSheet.home })
+  }),
+  cleanSheetAway: outcomes({
+    family: 'cleanSheetAway',
+    noun: 'away clean sheet',
+    selections: ['yes', 'no'],
+    partitionSum: 1,
+    oddsPattern: /^clean\s+sheet\s*-\s*away$/i,
+    oddsValues: { yes: 'Yes', no: 'No' },
+    observedKey: 'score',
+    won: (s, o) => ((o.home === 0) === (s === 'yes')),
+    from: (d) => ({ yes: d.cleanSheet.away, no: 1 - d.cleanSheet.away })
+  }),
+  winToNil: outcomes({
+    family: 'winToNil',
+    noun: 'win to nil',
+    selections: ['home', 'away'],
+    // NOT a partition and not completable either: in most matches NEITHER side
+    // wins to nil, so these two sum to well under 1 and there is no third
+    // selection to make up the difference. A live book read -55.6% margin when
+    // normalised. Null means the margin cannot be removed from within this
+    // market, so no consensus is offered — only the raw price.
+    partitionSum: null,
+    // The feed also carries `Win to Nil - Home` and `Win to Nil - Away` as
+    // separate yes/no markets, in different casing. This is the two-way one.
+    oddsPattern: /^win\s+to\s+nil$/i,
+    oddsValues: { home: 'Home', away: 'Away' },
+    observedKey: 'score',
+    won: (s, o) => (s === 'home' ? o.home > o.away && o.away === 0 : o.away > o.home && o.home === 0),
+    from: (d) => ({ home: d.winToNil.home, away: d.winToNil.away })
+  })
+};
+
+Object.assign(FAMILIES, OUTCOME_FAMILIES);
+
 const FAMILY_NAMES = Object.keys(FAMILIES);
+const TOTALS_FAMILIES = FAMILY_NAMES.filter((n) => FAMILIES[n].shape === 'totals');
+const OUTCOME_FAMILY_NAMES = FAMILY_NAMES.filter((n) => FAMILIES[n].shape === 'outcomes');
 
 function get(family) {
   const spec = FAMILIES[family];
@@ -72,11 +196,50 @@ function get(family) {
   return spec;
 }
 
-// Whether a bookmaker's market name is this family's full-match total.
+// Whether a bookmaker's market name is this family's market.
+//
+// The NOT_FULL_MATCH_TOTAL screen applies to TOTALS ONLY. It exists to keep
+// per-team and per-half variants out of an over/under, and applied blindly it
+// would reject half the outcomes families by their own names: `Clean Sheet -
+// Home` contains "home", and `Odd/Even` is itself one of the excluded patterns.
+// Those families are protected instead by anchors so tight that no adjacent
+// market can satisfy them.
 function isMarket(family, name) {
   const text = String(name || '').trim();
-  if (NOT_FULL_MATCH_TOTAL.some((p) => p.test(text))) return false;
-  return get(family).oddsPattern.test(text);
+  const spec = get(family);
+  if (spec.shape === 'totals' && NOT_FULL_MATCH_TOTAL.some((p) => p.test(text))) return false;
+  return spec.oddsPattern.test(text);
 }
 
-module.exports = { FAMILIES, FAMILY_NAMES, NOT_FULL_MATCH_TOTAL, get, isMarket };
+// Which selection a bookmaker's value string names, or null when it names none
+// of them. Compared case-insensitively and with whitespace collapsed, because
+// the same feed writes both `Win To Nil` and `Win to Nil - Away`.
+function selectionOf(family, value) {
+  const spec = get(family);
+  if (spec.shape !== 'outcomes') return null;
+  const text = String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  for (const [selection, label] of Object.entries(spec.oddsValues)) {
+    if (label.toLowerCase() === text) return selection;
+  }
+  return null;
+}
+
+// Whether a selection won, given the finished score. Throws for a family that
+// declares no rule rather than guessing — an unsettleable prediction must fail
+// loudly at settlement, not resolve to a plausible-looking loss.
+function settles(family, selection, observed) {
+  const spec = get(family);
+  if (typeof spec.won !== 'function') {
+    throw new Error(`market family "${family}" declares no settlement rule`);
+  }
+  if (!spec.selections.includes(selection)) {
+    throw new Error(`"${selection}" is not a selection of ${family}; `
+      + `it offers ${spec.selections.join(', ')}`);
+  }
+  return spec.won(selection, observed);
+}
+
+module.exports = {
+  FAMILIES, FAMILY_NAMES, TOTALS_FAMILIES, OUTCOME_FAMILY_NAMES,
+  NOT_FULL_MATCH_TOTAL, get, isMarket, selectionOf, settles
+};

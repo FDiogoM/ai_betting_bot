@@ -21,10 +21,21 @@ const totalsMarket = (family) => z.object({
   line: halfLine
 });
 
-const marketSchema = z.discriminatedUnion('family',
-  markets.FAMILY_NAMES
-    .filter((name) => markets.get(name).shape === 'totals')
-    .map(totalsMarket));
+// The second variant, and the reason the union was built rather than a flat
+// object. A market with named selections has no line at all — writing one would
+// be recording a number the bet does not have — and its selections are declared
+// by the family rather than shared, so a `home` on a 1X2 and a `yes` on both
+// teams to score are validated against different enums.
+//
+// Every prediction recorded before this variant existed still validates
+// unchanged, which is the whole point of discriminating on the family name.
+const outcomeMarket = (family) => z.object({
+  family: z.literal(family),
+  selection: z.enum(markets.get(family).selections)
+}).strict();
+
+const marketSchema = z.discriminatedUnion('family', markets.FAMILY_NAMES.map(
+  (name) => (markets.get(name).shape === 'totals' ? totalsMarket(name) : outcomeMarket(name))));
 
 const predictionSchema = z.object({
   fixture: z.object({
@@ -80,8 +91,12 @@ const predictionSchema = z.object({
 // detectable without a separate index.
 function predictionId(value) {
   const day = value.fixture.kickoff.slice(0, 10);
+  // The line is part of the identity only where the bet has one. Appending an
+  // absent line gave ids like "...-matchResult-homeundefined", which would have
+  // been stable and unique and completely unreadable.
+  const line = value.market.line === undefined ? '' : value.market.line;
   return `${day}-${value.fixture.id}-${value.market.family}-`
-    + `${value.market.selection}${value.market.line}`;
+    + `${value.market.selection}${line}`;
 }
 
 module.exports = { predictionSchema, predictionId, marketSchema, DIVERGENCE_THRESHOLD };

@@ -7,6 +7,7 @@ const goalsAggregate = require('../aggregate/goalsProfile');
 const { cornerBaseline } = require('./corners');
 const { goalsBaseline } = require('./goals');
 const markets = require('../markets');
+const { derivedMarkets } = require('./derived');
 
 // Computing a baseline for a fixture, in one place. This used to live inside
 // the get_*_baseline handlers, which meant record_prediction could not do it
@@ -66,6 +67,35 @@ async function resolveFixture(fixtureId, force) {
  * check what it is being asked to record — costs nothing beyond the arithmetic.
  */
 async function baselineFor(family, fixtureId, matchCount, lines, forceRefresh) {
+  const declared = markets.get(family);
+
+  // An outcomes family is priced from the score matrix, which is built from the
+  // two scoring rates the goals baseline already produces. No new request, no
+  // new statistic, no second model: 1X2, both teams to score and the rest are
+  // views of the same distribution the goals total was priced from, so they
+  // inherit its sample, its caveats and its signal.
+  if (declared.shape === 'outcomes') {
+    const goals = await baselineFor('goals', fixtureId, matchCount, undefined, forceRefresh);
+    const derived = derivedMarkets(goals.lambda.home, goals.lambda.away);
+    const probabilities = declared.from(derived);
+
+    return {
+      fixture: goals.fixture,
+      market: family,
+      shape: 'outcomes',
+      probabilities,
+      lambda: goals.lambda,
+      signal: goals.signal,
+      conversion: goals.conversion,
+      dispersion: goals.dispersion,
+      sample: goals.sample,
+      sampleSeasons: goals.sampleSeasons,
+      derived,
+      profiles: goals.profiles,
+      caveats: [...goals.caveats, ...derived.caveats]
+    };
+  }
+
   const s = spec(family);
   const fixture = await resolveFixture(fixtureId, forceRefresh);
 
