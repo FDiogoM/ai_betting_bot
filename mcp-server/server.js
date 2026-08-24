@@ -9,6 +9,8 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 
 const cache = require('./cache');
+const lifecycle = require('./lifecycle');
+const result = require('./result');
 const reference = require('./tools/reference');
 const fixtures = require('./tools/fixtures');
 const stats = require('./tools/stats');
@@ -41,6 +43,11 @@ async function main() {
   // and a client waiting on the handshake must not pay for housekeeping.
   // Expired entries are already treated as misses, so this frees disk without
   // changing a single answer.
+  // Armed after connecting so a slow start is never counted as idleness.
+  const { touch, idleMs } = lifecycle.start();
+  result.onActivity(touch);
+  if (idleMs) console.error('idle exit after ' + Math.round(idleMs / 60000) + ' minutes without a tool call');
+
   const pruned = cache.prune();
   if (pruned.removed) {
     console.error(`cache: pruned ${pruned.removed} expired entries `

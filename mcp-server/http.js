@@ -1,6 +1,7 @@
 'use strict';
 
 const axios = require('axios').default;
+const rateLimit = require('./rateLimit');
 
 const BASE_URL = 'https://v3.football.api-sports.io';
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -73,6 +74,10 @@ function classify(err, path) {
 
 async function request(path, params = {}) {
   const key = apiKey();
+  // Waits here rather than failing later: the per-minute ceiling is a pace
+  // limit, not a budget, so the right response to hitting it is to slow down.
+  await rateLimit.shared.acquire();
+
   let res;
   try {
     res = await axios.get(`${BASE_URL}${path}`, {
@@ -84,6 +89,10 @@ async function request(path, params = {}) {
     throw classify(err, path);
   }
 
+  // The provider states its own per-minute ceiling on every response. Trusting
+  // it beats trusting a default that was right when it was written.
+  rateLimit.shared.observe(numericHeader(res.headers, 'x-ratelimit-limit'));
+
   const problem = describeErrors(res.data && res.data.errors);
   if (problem) {
     throw new ApiError(`Provider rejected the request (${path}): ${problem}`, { path });
@@ -93,7 +102,12 @@ async function request(path, params = {}) {
     data: (res.data && res.data.response) || [],
     quota: {
       limit: numericHeader(res.headers, 'x-ratelimit-requests-limit'),
-      remaining: numericHeader(res.headers, 'x-ratelimit-requests-remaining')
+      remaining: numericHeader(res.headers, 'x-ratelimit-requests-remaining'),
+      // The pair that was being thrown away. Reported separately because they
+      // answer a different question: the daily figures say whether there is
+      // budget left, these say whether the next request may go now.
+      perMinuteLimit: numericHeader(res.headers, 'x-ratelimit-limit'),
+      perMinuteRemaining: numericHeader(res.headers, 'x-ratelimit-remaining')
     }
   };
 }

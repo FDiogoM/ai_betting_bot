@@ -25,7 +25,18 @@ function record(quota) {
   fs.mkdirSync(cacheDir(), { recursive: true });
   fs.writeFileSync(
     quotaFile(),
-    JSON.stringify({ limit: quota.limit, remaining: quota.remaining, updatedAt: new Date().toISOString() }),
+    JSON.stringify({
+      limit: quota.limit,
+      remaining: quota.remaining,
+      // The per-minute pair, kept beside the daily one because they constrain
+      // different things: the day says whether there is budget left, the minute
+      // says whether the next request may go now. Only the daily pair was ever
+      // recorded, which is how a bulletin could be throttled three times while
+      // reporting thousands of requests remaining.
+      perMinuteLimit: quota.perMinuteLimit === undefined ? null : quota.perMinuteLimit,
+      perMinuteRemaining: quota.perMinuteRemaining === undefined ? null : quota.perMinuteRemaining,
+      updatedAt: new Date().toISOString()
+    }),
     'utf8'
   );
 }
