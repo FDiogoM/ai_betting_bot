@@ -108,6 +108,60 @@ function readingRows(comparison, bootstrap, generatedAt) {
   ];
 }
 
+// The bankroll, day by day. `Em risco ao fecho` is deliberately its own column
+// and never folded into the balance: a day that closes up two units with nine
+// riding on tomorrow has not made two units, and one number cannot say that.
+function dailyRows(accounting) {
+  return accounting.days.map((d) => ({
+    'Data': d.date,
+    'Saldo inicial': d.openingBalance,
+    'Apostas abertas': d.betsOpened,
+    'Montante apostado': d.stakedOpened,
+    'Apostas fechadas': d.betsClosed,
+    'Ganhas': d.won,
+    'Perdidas': d.lost,
+    'Anuladas': d.voided,
+    'Resultado do dia': d.resultUnits,
+    'Saldo final': d.closingBalance,
+    'Em aberto ao fecho': d.openBets,
+    'Em risco ao fecho': d.openExposure
+  }));
+}
+
+function monthlyRows(accounting) {
+  return accounting.months.map((m) => ({
+    'Mês': m.month,
+    'Montante inicial': m.openingBalance,
+    'Montante final': m.closingBalance,
+    'Resultado (u)': m.resultUnits,
+    'Dias com atividade': m.activeDays,
+    'Apostas abertas': m.betsOpened,
+    'Apostas fechadas': m.betsClosed,
+    'Ganhas': m.won,
+    'Perdidas': m.lost,
+    'Anuladas': m.voided,
+    'Montante apostado': m.staked,
+    'Por fechar': m.openAtClose,
+    'Em risco': m.exposureAtClose
+  }));
+}
+
+// The bets that have not resolved. Carried in full because an exposure figure
+// without its contents is a number nobody can act on.
+function openRows(accounting) {
+  return accounting.openDetail.map((o) => ({
+    'Jogo': o.fixture,
+    'Início': o.kickoff,
+    'Mercado': o.market,
+    'Seleção': o.selection,
+    'Stake (u)': o.stake,
+    'Preço': o.price,
+    'Retorna se ganhar': o.toReturn,
+    'Registada em': o.recordedAt,
+    'Id': o.id
+  }));
+}
+
 /**
  * Writes the whole run to one workbook.
  *
@@ -116,6 +170,7 @@ function readingRows(comparison, bootstrap, generatedAt) {
  */
 function writeWorkbook(filePath, comparison, bootstrap, options = {}) {
   const generatedAt = options.generatedAt || new Date().toISOString();
+  const { accounting = null } = options;
   const book = XLSX.utils.book_new();
 
   const reading = readingRows(comparison, bootstrap, generatedAt);
@@ -133,24 +188,47 @@ function writeWorkbook(filePath, comparison, bootstrap, options = {}) {
     'P(perder)', 'Zero dentro do intervalo', 'Leitura'
   ]), 'Bootstrap');
 
+  const sheets = [
+    { name: 'Leitura', rows: reading.length },
+    { name: 'Estratégias', rows: strategies.length },
+    { name: 'Bootstrap', rows: boot.length }
+  ];
+
+  // The accounting sheets come before the strategy curves because they are the
+  // ones a person opens the file to read: what the month started at, what it is
+  // at now, and what is still riding.
+  if (accounting) {
+    const daily = dailyRows(accounting);
+    XLSX.utils.book_append_sheet(book, sheetFrom(monthlyRows(accounting), [
+      'Mês', 'Montante inicial', 'Montante final', 'Resultado (u)', 'Dias com atividade',
+      'Apostas abertas', 'Apostas fechadas', 'Ganhas', 'Perdidas', 'Anuladas',
+      'Montante apostado', 'Por fechar', 'Em risco'
+    ]), 'Mensal');
+    XLSX.utils.book_append_sheet(book, sheetFrom(daily, [
+      'Data', 'Saldo inicial', 'Apostas abertas', 'Montante apostado', 'Apostas fechadas',
+      'Ganhas', 'Perdidas', 'Anuladas', 'Resultado do dia', 'Saldo final',
+      'Em aberto ao fecho', 'Em risco ao fecho'
+    ]), 'Diário');
+    XLSX.utils.book_append_sheet(book, sheetFrom(openRows(accounting), [
+      'Jogo', 'Início', 'Mercado', 'Seleção', 'Stake (u)', 'Preço', 'Retorna se ganhar',
+      'Registada em', 'Id'
+    ]), 'Em aberto');
+    sheets.push(
+      { name: 'Mensal', rows: accounting.months.length },
+      { name: 'Diário', rows: daily.length },
+      { name: 'Em aberto', rows: accounting.openDetail.length });
+  }
+
   const curve = curveRows(comparison);
   XLSX.utils.book_append_sheet(book, sheetFrom(curve, [
     'Estratégia', 'Registado em', 'Id', 'Família', 'Stake (u)', 'Preço', 'Resultado',
     'Retorno (u)', 'Banca'
   ]), 'Curva');
+  sheets.push({ name: 'Curva', rows: curve.length });
 
   XLSX.writeFile(book, filePath);
 
-  return {
-    file: filePath,
-    generatedAt,
-    sheets: [
-      { name: 'Leitura', rows: reading.length },
-      { name: 'Estratégias', rows: strategies.length },
-      { name: 'Bootstrap', rows: boot.length },
-      { name: 'Curva', rows: curve.length }
-    ]
-  };
+  return { file: filePath, generatedAt, sheets };
 }
 
 module.exports = { writeWorkbook, strategyRows, bootstrapRows, curveRows, readingRows };

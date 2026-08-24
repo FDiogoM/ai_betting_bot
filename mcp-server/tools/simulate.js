@@ -7,6 +7,7 @@ const paths = require('../paths');
 const { compare, STRATEGIES } = require('../sim/replay');
 const { bootstrapComparison } = require('../sim/bootstrap');
 const { writeWorkbook } = require('../sim/workbook');
+const { account } = require('../sim/accounting');
 const { run } = require('../result');
 
 const STRATEGY_NAMES = Object.keys(STRATEGIES);
@@ -66,12 +67,30 @@ function register(server) {
           seed: seed === undefined ? 1 : seed
         });
 
+        // The bankroll, kept beside the strategy comparison: one answers "what
+        // would other rules have returned", the other "where does the money
+        // actually stand". They are different questions and the workbook
+        // carries both.
+        const accounting = account(
+          records.filter((r) => r.type === 'prediction'),
+          records.filter((r) => r.type === 'settlement'),
+          { openingBalance: startingBankroll || 100 });
+
         const written = write === false
           ? null
-          : writeWorkbook(workbook || defaultWorkbook(), comparison, bootstrap);
+          : writeWorkbook(workbook || defaultWorkbook(), comparison, bootstrap, { accounting });
 
         return {
           settled: comparison.settled,
+          bankroll: {
+            opening: accounting.openingBalance,
+            closing: accounting.closingBalance,
+            resultUnits: accounting.resultUnits,
+            maxDrawdown: accounting.maxDrawdown,
+            openBets: accounting.openBets,
+            openExposure: accounting.openExposure,
+            months: accounting.months
+          },
           pending: comparison.pending,
           warning: bootstrap.warning,
           // The curves are megabytes and belong in the workbook, not in a tool

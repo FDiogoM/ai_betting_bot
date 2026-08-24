@@ -12,14 +12,30 @@ const { run } = require('../result');
 // Which sample column a family's total lives in, for the correlation estimate.
 const TOTAL_KEY = { corners: 'totalCorners', goals: 'totalGoals' };
 
+// A condition the correlation module can evaluate against a historical match.
+// A totals leg names its column and line; an outcomes leg hands over the
+// registry's own predicate, so nothing here has to know what any market means.
+function conditionFor(leg) {
+  const spec = markets.get(leg.market.family);
+  if (spec.shape === 'totals') {
+    return { key: TOTAL_KEY[leg.market.family], selection: leg.market.selection, line: leg.market.line };
+  }
+  return {
+    needs: ['home', 'away'],
+    test: (sample) => markets.settles(spec.family, leg.market.selection, sample)
+  };
+}
+
 // Everything a leg needs, derived rather than transcribed — the same rule
 // record_prediction follows, for the same reason: a price or a baseline typed
 // by hand is one nobody can check, and a multiple multiplies whatever error is
 // in it.
 async function resolveLeg(leg, matchCount) {
+  const isTotals = markets.get(leg.market.family).shape === 'totals';
   const baseline = await fixtureBaseline.baselineFor(
-    leg.market.family, leg.fixtureId, matchCount, [leg.market.line], false);
-  const priced = fixtureBaseline.lineOf(baseline, leg.market.line);
+    leg.market.family, leg.fixtureId, matchCount,
+    isTotals ? [leg.market.line] : undefined, false);
+  const priced = isTotals ? fixtureBaseline.lineOf(baseline, leg.market.line) : null;
   const view = await marketViewFor(leg.market.family, leg.fixtureId, false);
   const selection = selectionView(view, leg.market.line, leg.market.selection);
 
@@ -28,10 +44,11 @@ async function resolveLeg(leg, matchCount) {
     fixture: baseline.fixture,
     market: leg.market,
     label: `${baseline.fixture.home}–${baseline.fixture.away} ${leg.market.family} `
-      + `${leg.market.selection} ${leg.market.line}`,
+      + `${leg.market.selection}${isTotals ? ` ${leg.market.line}` : ''}`,
     probability: leg.probability,
-    baselineProbability: leg.market.selection === 'over'
-      ? priced.overProbability : priced.underProbability,
+    baselineProbability: isTotals
+      ? (leg.market.selection === 'over' ? priced.overProbability : priced.underProbability)
+      : baseline.probabilities[leg.market.selection],
     decimalOdd: selection.bestPrice,
     bookmaker: selection.bookmaker,
     overround: selection.overround,
@@ -53,13 +70,9 @@ function groupByFixture(legs) {
 }
 
 async function correlationFor(group, matchCount) {
-  const conditions = group.map((leg) => ({
-    key: TOTAL_KEY[leg.market.family],
-    selection: leg.market.selection,
-    line: leg.market.line
-  }));
-  if (conditions.some((c) => !c.key)) {
-    return { measured: null, note: 'a family in this group has no total to correlate on' };
+  const conditions = group.map(conditionFor);
+  if (conditions.some((c) => !c.test && !c.key)) {
+    return { measured: null, note: 'a family in this group cannot be tested against a past match' };
   }
 
   const sample = await jointSample(
@@ -94,8 +107,11 @@ function register(server) {
           fixtureId: z.number().int().positive(),
           market: z.object({
             family: z.enum(markets.FAMILY_NAMES),
-            selection: z.enum(['over', 'under']),
-            line: z.number().describe('Half-integer market line.')
+            selection: z.string()
+              .describe('"over" or "under" for a totals family; otherwise the family\'s own '
+                + 'selection, such as home/draw/away or yes/no.'),
+            line: z.number().optional()
+              .describe('Half-integer line, for a totals family only.')
           }),
           probability: z.number().gt(0).lt(1).describe('YOUR probability for this leg alone.')
         })).min(2).describe('Two or more selections. Each should be one you would back on its '

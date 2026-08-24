@@ -24,7 +24,12 @@ function totalsByFixture(cornerMatches, goalsMatches) {
       date: g.date,
       season: g.season,
       totalGoals: g.goalsFor + g.goalsAgainst,
-      totalCorners: c.cornersFor + c.cornersAgainst
+      totalCorners: c.cornersFor + c.cornersAgainst,
+      // Kept as HOME and AWAY rather than for and against, because an outcomes
+      // family asks "did the home side win", not "did this team win". The
+      // profile is built from one team's perspective; correlation is not.
+      home: g.venue === 'home' ? g.goalsFor : g.goalsAgainst,
+      away: g.venue === 'home' ? g.goalsAgainst : g.goalsFor
     });
   }
   return rows;

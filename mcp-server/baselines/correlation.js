@@ -30,13 +30,27 @@ const MIN_JOINT_SAMPLE = 16;
 const MIN_LIFT = 0.6;
 const MAX_LIFT = 1.6;
 
-function cleared(total, selection, line) {
-  return selection === 'over' ? total > line : total < line;
+// Whether a historical match would have won this condition.
+//
+// Two forms, because two shapes. A totals condition names a column and a line;
+// an outcomes condition carries its own predicate, supplied by the family that
+// knows what "win to nil" means. Neither this module nor the caller has to
+// learn the other's rules.
+function cleared(sample, condition) {
+  if (typeof condition.test === 'function') return condition.test(sample);
+  const total = sample[condition.key];
+  return condition.selection === 'over' ? total > condition.line : total < condition.line;
+}
+
+// Whether a sample row carries everything a condition needs to be evaluated. A
+// row missing the count is not a row where the condition failed.
+function usableFor(sample, condition) {
+  const keys = condition.test ? (condition.needs || ['home', 'away']) : [condition.key];
+  return keys.every((k) => Number.isFinite(sample[k]));
 }
 
 function rate(samples, condition) {
-  const hits = samples.filter((s) => cleared(s[condition.key], condition.selection, condition.line));
-  return hits.length / samples.length;
+  return samples.filter((s) => cleared(s, condition)).length / samples.length;
 }
 
 function round(n, places = 4) {
@@ -57,8 +71,7 @@ function round(n, places = 4) {
  * "assume independence and say so", never "assume 1 and move on".
  */
 function empiricalJoint(samples, conditions) {
-  const usable = (samples || []).filter((s) => conditions
-    .every((c) => typeof s[c.key] === 'number' && Number.isFinite(s[c.key])));
+  const usable = (samples || []).filter((s) => conditions.every((c) => usableFor(s, c)));
 
   if (usable.length < MIN_JOINT_SAMPLE) {
     return {
@@ -73,8 +86,7 @@ function empiricalJoint(samples, conditions) {
     };
   }
 
-  const jointHits = usable.filter((s) => conditions
-    .every((c) => cleared(s[c.key], c.selection, c.line)));
+  const jointHits = usable.filter((s) => conditions.every((c) => cleared(s, c)));
   const jointRate = jointHits.length / usable.length;
   const marginalRates = conditions.map((c) => rate(usable, c));
   const independentProduct = marginalRates.reduce((a, b) => a * b, 1);
