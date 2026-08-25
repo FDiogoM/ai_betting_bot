@@ -4,6 +4,7 @@ const { z } = require('zod');
 const store = require('../ledger/store');
 const scoring = require('../ledger/scoring');
 const version = require('../version');
+const markets = require('../markets');
 const telegram = require('../notify/telegram');
 const { buildDigest } = require('../notify/digest');
 const { run } = require('../result');
@@ -47,13 +48,24 @@ function register(server) {
         const records = store.readAll();
         const predictions = records.filter((r) => r.type === 'prediction' && recordedOn(r, day));
 
+        const allPredictions = records.filter((r) => r.type === 'prediction');
+        const settlements = records.filter((r) => r.type === 'settlement');
+        const summary = scoring.summarise(allPredictions, settlements);
+
+        // Per family as well as overall, because that is the only comparison
+        // that means anything: goals lines sit at probabilities corners never
+        // reach, so a pooled Brier mixes two things and says less than either
+        // half. The digest leads with these.
+        summary.byFamily = {};
+        for (const family of markets.FAMILY_NAMES) {
+          const f = scoring.summarise(allPredictions, settlements, family);
+          if (f.n) summary.byFamily[family] = f;
+        }
+
         const text = buildDigest({
           date: day,
           predictions,
-          summary: scoring.summarise(
-            records.filter((r) => r.type === 'prediction'),
-            records.filter((r) => r.type === 'settlement')
-          ),
+          summary,
           server: version.status(),
           artifactUrl: artifactUrl || null
         });

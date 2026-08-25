@@ -85,6 +85,40 @@ function concentration(predictions) {
     + ` — ${num(units, 2)}u numa só direção, mais perto de uma aposta do que de ${predictions.length}.`;
 }
 
+// One line per family saying who is ahead, then the balance. Per family because
+// that is the only comparison that means anything — goals lines sit at
+// probabilities corners never reach, so a pooled figure mixes two things.
+//
+// The comparison is against the MARKET, not the baseline. Beating a venue-split
+// Poisson is easy; beating the de-vigged market is the thing that pays, and it
+// is the number that should be read first every morning.
+function standing(summary) {
+  const rows = [];
+  for (const [key, label] of [['corners', 'Cantos'], ['goals', 'Golos'], ['cards', 'Cartões']]) {
+    const f = summary.byFamily && summary.byFamily[key];
+    if (!f || !f.n) continue;
+    const mine = f.agent.brier;
+    const market = f.marketConsensus ? f.marketConsensus.brier : null;
+    if (mine === null || market === null) continue;
+    const ahead = mine < market;
+    rows.push(`${ahead ? '✅' : '❌'} <b>${label}</b> ${ahead ? 'à frente do' : 'atrás do'} mercado`
+      + ` <code>${num(mine)}</code> vs <code>${num(market)}</code> (n=${f.n})`);
+  }
+
+  if (!rows.length) {
+    rows.push(`<b>Registo</b> · ${summary.n} liquidadas, ainda sem leitura por família`);
+  }
+
+  rows.push(`Banca <code>${num(summary.pnl.units, 2)}u</code>`
+    + ` · veredicto <i>${esc(summary.verdict)}</i>`);
+
+  // The finding the whole system exists to surface. It leads, always.
+  if (summary.verdict === 'baseline-better') {
+    rows.unshift('⚠️ <b>a baseline está a pontuar melhor que o agente</b>');
+  }
+  return rows.join('\n');
+}
+
 /**
  * The whole message.
  *
@@ -105,6 +139,15 @@ function buildDigest(options) {
       + 'repositório. Reinicia o servidor MCP; até lá, desconfia de tudo o que se segue.');
   }
 
+  // The standing before the day's picks, deliberately.
+  //
+  // A digest that opens with "4 seleções" makes a day with none read as a
+  // malfunction, when it is a perfectly good answer and the procedure says so.
+  // It also puts the least reliable thing first: what the system knows about
+  // its own accuracy has months of evidence behind it, and today's four picks
+  // have none. Leading with the record is leading with what is actually known.
+  if (summary) parts.push(standing(summary));
+
   if (!predictions.length) {
     parts.push('Nenhuma seleção hoje. Um dia sem valor é informação, não uma avaria.');
   } else {
@@ -117,19 +160,13 @@ function buildDigest(options) {
     if (warning) parts.push(warning);
   }
 
+  // The detail, after the picks. The headline went first; this is for whoever
+  // wants the whole reading rather than the verdict.
   if (summary) {
-    const rows = [`<b>Registo</b> · ${summary.n} liquidadas · ${summary.pending} pendentes`];
-    rows.push(`agente <code>${num(summary.agent.brier)}</code>`
+    parts.push(`<b>Registo</b> · ${summary.n} liquidadas · ${summary.pending} pendentes`
+      + `\nagente <code>${num(summary.agent.brier)}</code>`
       + ` · baseline <code>${num(summary.baseline.brier)}</code>`
       + ` · mercado <code>${num(summary.marketConsensus && summary.marketConsensus.brier)}</code>`);
-    rows.push(`P&amp;L <code>${num(summary.pnl.units, 2)}u</code>`
-      + ` · veredicto <i>${esc(summary.verdict)}</i>`);
-    // The finding the whole system exists to surface. It does not get buried in
-    // a digest any more than it does in the bulletin.
-    if (summary.verdict === 'baseline-better') {
-      rows.push('⚠️ <b>a baseline está a pontuar melhor que o agente</b>');
-    }
-    parts.push(rows.join('\n'));
   }
 
   if (artifactUrl) parts.push(`<a href="${esc(artifactUrl)}">boletim completo</a>`);

@@ -172,3 +172,71 @@ test('the digest stays inside the message limit', () => {
   assert.ok(text.length <= 4096, `got ${text.length} characters`);
   assert.match(text, /truncado/);
 });
+
+// --- what leads ---------------------------------------------------------------
+
+// A digest that opens with "4 seleções" makes a day with none read as a
+// malfunction, when it is a perfectly good answer. It also puts the least
+// reliable thing first: the standing has months of evidence behind it and
+// today's picks have none.
+const WITH_FAMILIES = {
+  ...SUMMARY,
+  byFamily: {
+    corners: { n: 7, agent: { brier: 0.207 }, marketConsensus: { brier: 0.253 } },
+    goals: { n: 19, agent: { brier: 0.192 }, marketConsensus: { brier: 0.177 } }
+  }
+};
+
+test('the standing leads, before the day\'s picks', () => {
+  const text = buildDigest({
+    date: '2026-08-25',
+    predictions: [pick()],
+    summary: WITH_FAMILIES
+  });
+
+  const standing = text.indexOf('Cantos');
+  const picks = text.indexOf('Everton');
+  assert.ok(standing > -1 && picks > -1);
+  assert.ok(standing < picks, 'what is known must come before what was decided today');
+});
+
+test('each family says whether it is ahead of the MARKET, not the baseline', () => {
+  const text = buildDigest({ date: '2026-08-25', predictions: [], summary: WITH_FAMILIES });
+
+  assert.match(text, /✅.*Cantos.*à frente do mercado.*0\.207.*0\.253.*n=7/);
+  assert.match(text, /❌.*Golos.*atrás do mercado.*0\.192.*0\.177.*n=19/);
+});
+
+test('a day with no picks still leads with the standing and reads as a result', () => {
+  const text = buildDigest({ date: '2026-08-25', predictions: [], summary: WITH_FAMILIES });
+
+  assert.ok(text.indexOf('Cantos') < text.indexOf('Nenhuma seleção'));
+  assert.match(text, /informação, não uma avaria/);
+});
+
+test('a family with nothing settled is left out rather than shown empty', () => {
+  const text = buildDigest({
+    date: '2026-08-25',
+    predictions: [],
+    summary: { ...WITH_FAMILIES, byFamily: { ...WITH_FAMILIES.byFamily, cards: { n: 0 } } }
+  });
+
+  assert.ok(!/Cartões/.test(text), 'a family with no settled bets says nothing');
+});
+
+test('with no per-family reading yet, it says so instead of staying silent', () => {
+  const text = buildDigest({ date: '2026-08-25', predictions: [], summary: SUMMARY });
+
+  assert.match(text, /ainda sem leitura por família/);
+});
+
+test('the baseline beating the agent is hoisted above everything', () => {
+  const text = buildDigest({
+    date: '2026-08-25',
+    predictions: [pick()],
+    summary: { ...WITH_FAMILIES, verdict: 'baseline-better' }
+  });
+
+  assert.ok(text.indexOf('a baseline está a pontuar melhor') < text.indexOf('Cantos'),
+    'the finding the system exists to surface leads even the standing');
+});
