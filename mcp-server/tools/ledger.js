@@ -15,6 +15,7 @@ const markets = require('../markets');
 const scoring = require('../ledger/scoring');
 const fixtureBaseline = require('../baselines/fixtureBaseline');
 const marketView = require('../aggregate/marketView');
+const clv = require('../baselines/clv');
 
 const VOID_STATUSES = new Set(['ABD', 'CANC', 'PST', 'AWD', 'WO']);
 
@@ -49,6 +50,37 @@ const OBSERVERS = {
     return home === null || away === null ? null : home + away;
   }
 };
+
+/**
+ * What the price taken was worth against the closing line.
+ *
+ * Never throws and never blocks a settlement. A missing snapshot, a market that
+ * stopped being quoted, a provider hiccup — all of them make the value
+ * unmeasurable, and an unmeasurable CLV must not cost the ledger a settled
+ * result. The bet is still graded; only this reading is lost.
+ */
+async function measureClv(prediction) {
+  try {
+    const view = await marketView.marketViewFor(prediction.market.family,
+      prediction.fixture.id, false);
+    if (!view) return { measurable: false, note: 'nobody quoted this market at the close' };
+
+    const closing = marketView.selectionView(view, prediction.market.line,
+      prediction.market.selection);
+
+    return clv.closingLineValue({
+      takenPrice: prediction.marketView.bestPrice,
+      closingPrice: closing.bestPrice,
+      closingFairProbability: closing.consensusProbability,
+      minutesBeforeKickoff: view.snapshotAt
+        ? Math.round((new Date(prediction.fixture.kickoff) - new Date(view.snapshotAt)) / 60000)
+        : null
+    });
+  } catch (err) {
+    return { measurable: false,
+      note: `no closing reading: ${err && err.message ? err.message : String(err)}` };
+  }
+}
 
 // Settles one prediction, or returns null to leave it pending. Never infers a
 // result: a finished match whose count is missing is void, not guessed.
@@ -109,6 +141,10 @@ async function settle(prediction) {
   return {
     ...settlement,
     observed,
+    // Measured here rather than by a job near kickoff, because the provider
+    // keeps its last pre-match snapshot after the match — which the plan had
+    // assumed it did not. See baselines/clv.js.
+    closingLineValue: await measureClv(prediction),
     outcome: won ? 'win' : 'loss',
     returnUnits: won
       ? Math.round(stake * (prediction.marketView.bestPrice - 1) * 1e6) / 1e6

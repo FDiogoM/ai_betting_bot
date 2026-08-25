@@ -140,18 +140,23 @@ async function marketViewFor(family, fixtureId, forceRefresh) {
   const odds = await provider.fetch(provider.ENDPOINTS.ODDS,
     { fixture: fixtureId }, cache.TTL.ODDS, forceRefresh);
 
+  // When the provider last wrote these prices down. After a match this is its
+  // final pre-match snapshot, which is what makes closing line value measurable
+  // at settlement rather than needing a job near kickoff.
+  const snapshotAt = odds.length && odds[0].update ? odds[0].update : null;
+
   const spec = require('../markets').get(family);
   if (spec.shape === 'outcomes') {
     const parsed = parseOutcomes(family, odds);
     const anyQuoted = spec.selections.some((s) => parsed[s].length);
     if (!anyQuoted) return null;
-    return { fixtureId, market: family, shape: 'outcomes', ...summariseOutcomes(family, parsed) };
+    return { fixtureId, market: family, shape: 'outcomes', snapshotAt, ...summariseOutcomes(family, parsed) };
   }
 
   const quotes = parseQuotes(family, odds);
   if (!quotes.length) return null;
 
-  return { fixtureId, market: family, shape: 'totals', lines: quotes.map(summariseLine) };
+  return { fixtureId, market: family, shape: 'totals', snapshotAt, lines: quotes.map(summariseLine) };
 }
 
 // A selection nobody you can bet with has priced. Names the restriction,

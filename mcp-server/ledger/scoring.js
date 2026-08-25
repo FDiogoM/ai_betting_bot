@@ -6,6 +6,7 @@
 // drift, and the whole point of that measurement is to watch the threshold's
 // effect on behaviour.
 const { DIVERGENCE_THRESHOLD } = require('./schema');
+const clvScoring = require('../baselines/clv');
 
 // Below this many settled predictions, a difference in Brier score is noise.
 // The numbers are still reported; the verdict is withheld.
@@ -264,6 +265,12 @@ function summarise(predictions, settlements, market = null) {
     baseline,
     marketConsensus,
     blend,
+    // Closing line value, over the same settled bets. It is reported without an
+    // `insufficient` floor, unlike the Brier verdict, and deliberately: a
+    // settled bet yields one bit and needs hundreds to separate skill from
+    // luck, while CLV yields a continuous measurement and says something real
+    // after a few dozen. It is the fastest honest signal this ledger has.
+    clv: clvScoring.summariseClv(settled.map((s) => s.closingLineValue)),
     judgment: judgmentSize(considered),
     pnl: pnl(settled.filter((s) => typeof s.returnUnits === 'number')),
     verdict,

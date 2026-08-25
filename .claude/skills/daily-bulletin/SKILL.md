@@ -60,6 +60,10 @@ its `note` says the typical prediction restates the baseline, put that in the
 bulletin: it means the comparison below it is measuring nothing, and no amount
 of further running will fix that on its own.
 
+**Read `clv` too, and give it more weight than its n suggests.** Closing line value is measured at settlement against the last pre-match snapshot the provider kept — no separate job near kickoff, which the plan had assumed was necessary. A settled bet yields one bit and needs hundreds to separate skill from luck; CLV yields a continuous measurement and says something real after a few dozen. `stale` marks a snapshot too far from kickoff to be a close, and those are excluded from the mean rather than dropped quietly.
+
+It carries one caveat that is currently large: predictions written before 2026-08-24 took the best price across all bookmakers, so their CLV compares a price that was never takeable against a close. Read `marketView.execution` on each record.
+
 **`marketConsensus` is the hard benchmark.** Beating a venue-split Poisson is
 easy; beating the de-vigged market is the thing that pays. `blend.weight` is the
 model weight that would have scored best in hindsight — near 0 says the market
