@@ -240,3 +240,75 @@ test('the baseline beating the agent is hoisted above everything', () => {
   assert.ok(text.indexOf('a baseline está a pontuar melhor') < text.indexOf('Cantos'),
     'the finding the system exists to surface leads even the standing');
 });
+
+// --- the money ---------------------------------------------------------------
+
+const BANKROLL = { amount: 100, currency: 'EUR', stakeFraction: 0.01 };
+
+test('a stake is shown as money, with what a win returns', () => {
+  const text = buildDigest({
+    date: '2026-08-25',
+    predictions: [pick({ agent: { probability: 0.35, stake: 0.43 },
+      marketView: { consensusProbability: 0.275, bestPrice: 3.4, bookmaker: 'Betano', overround: 0.06 } })],
+    bankroll: BANKROLL
+  });
+
+  // 0.43u at 1% of 100 is 0.43 EUR; 0.43 at 3.40 returns 1.46 including stake.
+  assert.match(text, /0\.43 EUR.*@.*3\.40.*→.*1\.46 EUR/);
+  assert.match(text, /\(0\.43u\)/, 'the unit figure stays, for the ledger to be checked against');
+});
+
+// A digest that invents a bankroll prints a figure the reader will act on.
+test('with no bankroll configured it says units and explains itself', () => {
+  const text = buildDigest({ date: '2026-08-25', predictions: [pick()] });
+
+  assert.ok(!/EUR/.test(text), 'no currency may appear from nowhere');
+  assert.match(text, /stake.*0\.58u/);
+  assert.match(text, /define `?bankroll`? e `?currency`?/);
+});
+
+test('a nonsensical bankroll falls back rather than printing nonsense', () => {
+  for (const bad of [{ amount: 0, stakeFraction: 0.01 }, { amount: 100, stakeFraction: 0 },
+    { amount: NaN, stakeFraction: 0.01 }, null]) {
+    const text = buildDigest({ date: '2026-08-25', predictions: [pick()], bankroll: bad });
+    assert.ok(!/EUR|💶/.test(text), `a bankroll of ${JSON.stringify(bad)} produced money`);
+  }
+});
+
+// A bookmaker will not take a third of a cent, and rounding up would quietly
+// stake more than the rule said.
+test('money rounds down to the cent, never up', () => {
+  const text = buildDigest({
+    date: '2026-08-25',
+    predictions: [pick({ agent: { probability: 0.5, stake: 0.589 },
+      marketView: { consensusProbability: 0.5, bestPrice: 2.0, bookmaker: 'Betano', overround: 0.05 } })],
+    bankroll: BANKROLL
+  });
+
+  assert.match(text, /0\.58 EUR/, '0.589 units must floor to 0.58, not round to 0.59');
+});
+
+test('the day total is money too', () => {
+  const text = buildDigest({
+    date: '2026-08-25',
+    predictions: [pick({ agent: { probability: 0.5, stake: 1 } }),
+      pick({ agent: { probability: 0.5, stake: 0.5 } })],
+    bankroll: BANKROLL
+  });
+
+  assert.match(text, /1\.50 EUR em risco/);
+});
+
+// "over 2.5" cannot be checked against a slip without knowing which family, and
+// "home" cannot without knowing whether it is the result or a clean sheet.
+test('every family and selection has a readable label', () => {
+  const markets = require('../markets');
+  const { FAMILY_LABEL, SIDE_LABEL } = require('../notify/digest');
+
+  for (const family of markets.FAMILY_NAMES) {
+    assert.ok(FAMILY_LABEL[family], `${family} has no label`);
+    for (const selection of (markets.get(family).selections || ['over', 'under'])) {
+      assert.ok(SIDE_LABEL[selection], `selection "${selection}" of ${family} has no label`);
+    }
+  }
+});

@@ -52,23 +52,80 @@ function num(n, places = 3) {
   return typeof n === 'number' ? n.toFixed(places) : '—';
 }
 
-const FAMILY_LABEL = { corners: 'Cantos', goals: 'Golos' };
-const SIDE_LABEL = { over: 'mais de', under: 'menos de' };
+// All ten, because a phone message that says "over 2.5" without saying goals,
+// corners or cards cannot be checked against a bookmaker's slip — and neither
+// can "home" without saying whether it is the match result or a clean sheet.
+const FAMILY_LABEL = {
+  corners: 'Cantos',
+  goals: 'Golos',
+  cards: 'Cartões',
+  matchResult: 'Resultado',
+  doubleChance: 'Dupla hipótese',
+  bothTeamsScore: 'Ambas marcam',
+  oddEven: 'Par/ímpar',
+  cleanSheetHome: 'Casa não sofre',
+  cleanSheetAway: 'Fora não sofre',
+  winToNil: 'Vence a zero'
+};
 
-function pickLines(p) {
+const SIDE_LABEL = {
+  over: 'mais de',
+  under: 'menos de',
+  home: 'casa',
+  draw: 'empate',
+  away: 'fora',
+  homeOrDraw: 'casa ou empate',
+  homeOrAway: 'casa ou fora',
+  drawOrAway: 'empate ou fora',
+  yes: 'sim',
+  no: 'não',
+  odd: 'ímpar',
+  even: 'par'
+};
+
+// What a stake of N units is in actual money, or null when nobody has said what
+// a unit is worth.
+//
+// Never guessed. A digest that invents a bankroll prints a figure the reader
+// will act on, and being wrong about it is worse than saying units — so with no
+// bankroll configured this returns null and the caller falls back.
+function money(units, bankroll) {
+  if (!bankroll || !Number.isFinite(bankroll.amount) || bankroll.amount <= 0) return null;
+  if (!Number.isFinite(bankroll.stakeFraction) || bankroll.stakeFraction <= 0) return null;
+  const value = units * bankroll.stakeFraction * bankroll.amount;
+  // Rounded down to the cent: a bookmaker will not take a third of one, and
+  // rounding up would quietly stake more than the rule said.
+  return Math.floor(value * 100) / 100;
+}
+
+function amount(value, bankroll) {
+  return `${value.toFixed(2)}${bankroll.currency ? ` ${bankroll.currency}` : ''}`;
+}
+
+function pickLines(p, bankroll) {
   const family = FAMILY_LABEL[p.market.family] || p.market.family;
   const side = SIDE_LABEL[p.market.selection] || p.market.selection;
   const mine = p.agent.probability;
   const market = p.marketView.consensusProbability;
+  const line = p.market.line === undefined || p.market.line === null ? '' : ` ${p.market.line}`;
+
+  const stake = money(p.agent.stake, bankroll);
+  // What comes back on a win, stake included — the number a slip shows, not the
+  // profit, so it can be checked against the bookmaker's own confirmation.
+  const returns = stake === null ? null : Math.floor(stake * p.marketView.bestPrice * 100) / 100;
 
   return [
     `⚽ <b>${esc(p.fixture.home)} – ${esc(p.fixture.away)}</b>`,
-    `${esc(family)} ${esc(side)} ${p.market.line} · <code>${num(p.marketView.bestPrice, 2)}</code>`
+    `${esc(family)} ${esc(side)}${line} · <code>${num(p.marketView.bestPrice, 2)}</code>`
       + ` ${esc(p.marketView.bookmaker)} · ${esc(kickoff(p.fixture.kickoff))}`,
+    stake === null
+      ? `stake <code>${num(p.agent.stake, 2)}u</code>`
+      : `💶 <b>${esc(amount(stake, bankroll))}</b> @ <code>${num(p.marketView.bestPrice, 2)}</code>`
+        + ` → <b>${esc(amount(returns, bankroll))}</b>`
+        + `  <i>(${num(p.agent.stake, 2)}u)</i>`,
     `minha <code>${num(mine)}</code>`
       + ` · mercado <code>${market === null ? '—' : num(market)}</code>`
       + ` · edge <code>${pct(p.edge)}</code>`
-      + ` · stake <code>${num(p.agent.stake, 2)}u</code>`
   ].join('\n');
 }
 
@@ -128,7 +185,8 @@ function standing(summary) {
  */
 function buildDigest(options) {
   const {
-    date, predictions = [], summary = null, server = null, artifactUrl = null
+    date, predictions = [], summary = null, server = null, artifactUrl = null,
+    bankroll = null
   } = options;
 
   const parts = [];
@@ -152,9 +210,17 @@ function buildDigest(options) {
     parts.push('Nenhuma seleção hoje. Um dia sem valor é informação, não uma avaria.');
   } else {
     const units = predictions.reduce((acc, p) => acc + p.agent.stake, 0);
+    const total = money(units, bankroll);
     parts.push(`<b>${predictions.length} ${predictions.length === 1 ? 'seleção' : 'seleções'}`
-      + ` · ${num(units, 2)}u em risco</b>`);
-    for (const p of predictions) parts.push(pickLines(p));
+      + (total === null ? ` · ${num(units, 2)}u em risco</b>` : ` · ${esc(amount(total, bankroll))} em risco</b>`));
+    for (const p of predictions) parts.push(pickLines(p, bankroll));
+
+    // Said once, at the point where a reader would otherwise wonder why there
+    // are no euros: a bankroll nobody configured is not a bankroll of zero.
+    if (total === null) {
+      parts.push('<i>stakes em unidades: define `bankroll` e `currency` em config/bulletin.json '
+        + 'para veres os montantes.</i>');
+    }
 
     const warning = concentration(predictions);
     if (warning) parts.push(warning);
@@ -176,4 +242,4 @@ function buildDigest(options) {
   return text.slice(0, LIMIT - TRUNCATION_NOTE.length) + TRUNCATION_NOTE;
 }
 
-module.exports = { buildDigest, esc, LIMIT };
+module.exports = { buildDigest, esc, LIMIT, FAMILY_LABEL, SIDE_LABEL };

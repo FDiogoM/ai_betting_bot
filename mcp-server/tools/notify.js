@@ -5,6 +5,9 @@ const store = require('../ledger/store');
 const scoring = require('../ledger/scoring');
 const version = require('../version');
 const markets = require('../markets');
+const path = require('path');
+const fs2 = require('fs');
+const paths = require('../paths');
 const telegram = require('../notify/telegram');
 const { buildDigest } = require('../notify/digest');
 const { run } = require('../result');
@@ -13,6 +16,25 @@ const { run } = require('../result');
 // date prefix is the whole comparison.
 function recordedOn(record, day) {
   return typeof record.recordedAt === 'string' && record.recordedAt.slice(0, 10) === day;
+}
+
+// What a unit is worth, read from the file the strategy is already configured
+// in. Absent or malformed means units only: a digest that invents a bankroll
+// prints a figure the reader will act on, and being wrong about that is worse
+// than saying 0.43u.
+function bankrollFromConfig() {
+  try {
+    const cfg = JSON.parse(fs2.readFileSync(
+      path.join(paths.ROOT, 'config', 'bulletin.json'), 'utf8'));
+    if (!Number.isFinite(cfg.bankroll) || cfg.bankroll <= 0) return null;
+    return {
+      amount: cfg.bankroll,
+      currency: cfg.currency || null,
+      stakeFraction: cfg.stakeFraction
+    };
+  } catch (err) {
+    return null;
+  }
 }
 
 function today() {
@@ -67,6 +89,7 @@ function register(server) {
           predictions,
           summary,
           server: version.status(),
+          bankroll: bankrollFromConfig(),
           artifactUrl: artifactUrl || null
         });
 
