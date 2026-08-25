@@ -48,6 +48,7 @@ function createLimiter(options = {}) {
   let stamps = [];
   let waits = 0;
   let waitedMs = 0;
+  let rejections = 0;
 
   function prune(at) {
     stamps = stamps.filter((t) => at - t < WINDOW_MS);
@@ -98,6 +99,22 @@ function createLimiter(options = {}) {
     while (stamps.length < shouldBeUsed) stamps.push(at);
   }
 
+  // The provider just said no. Fill the window so the next acquire() waits out
+  // the rest of the minute.
+  //
+  // This exists because the refusal arrives as HTTP 200 with an `errors` field
+  // rather than a 429, and that response carries no useful per-minute counter —
+  // so `observe` learns nothing from the one message that proves we overran. A
+  // sweep on 2026-08-25 paused 43 times, waited 46 of its 69 seconds, and still
+  // lost 39 requests, because every rejection taught the limiter nothing and it
+  // kept firing into a closed window.
+  function exhausted() {
+    const at = now();
+    prune(at);
+    while (stamps.length < limit) stamps.push(at);
+    rejections += 1;
+  }
+
   function state() {
     prune(now());
     return {
@@ -105,11 +122,12 @@ function createLimiter(options = {}) {
       usedInWindow: stamps.length,
       remainingInWindow: Math.max(0, limit - stamps.length),
       waits,
-      waitedMs
+      waitedMs,
+      rejections
     };
   }
 
-  return { acquire, observe, state };
+  return { acquire, observe, exhausted, state };
 }
 
 // One limiter for the process, because the ceiling is per key and every request

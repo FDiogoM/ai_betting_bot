@@ -84,7 +84,21 @@ function classify(err, path) {
   return new ApiError(`Request failed (${path}): ${err && err.message ? err.message : String(err)}`);
 }
 
-async function request(path, params = {}) {
+// The provider refuses an over-pace request with HTTP 200 and a populated
+// `errors` field rather than a 429, so reading the body is the only way to
+// recognise it. classify() above handles the 429 form; this handles the one the
+// provider actually uses.
+function isPaceRejection(problem) {
+  // Deliberately broad. The provider has more than one wording for this — a
+  // burst on 2026-08-25 produced six refusals whose text began "require", which
+  // matched none of the patterns then in use, so the limiter learned nothing and
+  // all six were lost. Matching a refusal that turns out to be something else
+  // costs one wasted minute; missing one costs the request.
+  return typeof problem === 'string'
+    && /rate\s*limit|per minute|too many requests|requests? (?:limit|per)/i.test(problem);
+}
+
+async function request(path, params = {}, attempt = 0) {
   const key = apiKey();
   // Waits here rather than failing later: the per-minute ceiling is a pace
   // limit, not a budget, so the right response to hitting it is to slow down.
@@ -109,6 +123,21 @@ async function request(path, params = {}) {
 
   const problem = describeErrors(res.data && res.data.errors);
   if (problem) {
+    // A pace refusal is not a failure, it is a request that arrived too early.
+    //
+    // Telling the limiter matters more than the retry: this response is the
+    // only proof the window was closed, and its headers carry no counter that
+    // would have said so. Without it the limiter kept believing it had room —
+    // a sweep on 2026-08-25 paused 43 times, waited 46 of its 69 seconds, and
+    // still lost 39 requests to a window it never learned was shut.
+    //
+    // Once only. A second refusal after waiting out a full minute is a real
+    // problem — another process on the same key, or a lower ceiling than the
+    // headers claim — and should surface rather than spin.
+    if (isPaceRejection(problem) && attempt < 1) {
+      rateLimit.shared.exhausted();
+      return request(path, params, attempt + 1);
+    }
     throw new ApiError(`Provider rejected the request (${path}): ${problem}`, { path });
   }
 

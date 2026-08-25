@@ -257,3 +257,43 @@ test('an exhausted remaining makes the next request wait', async () => {
 
   assert.strictEqual(clock.slept.length, 1, 'it must wait rather than fire into a full window');
 });
+
+// The refusal arrives as HTTP 200 with an `errors` field, not a 429, and that
+// response carries no per-minute counter — so it is the ONLY proof the window
+// was shut, and observe() learns nothing from it. Without exhausted(), a sweep
+// on 2026-08-25 paused 43 times, waited 46 of its 69 seconds, and still lost 39
+// requests to a window it never learned was closed.
+test('a refusal shuts the window even though the response says nothing', async () => {
+  const clock = fakeClock();
+  const limiter = rateLimit.createLimiter({ perMinute: 10, now: clock.now, sleep: clock.sleep });
+
+  await limiter.acquire();
+  assert.strictEqual(limiter.state().remainingInWindow, 9);
+
+  limiter.exhausted();
+
+  assert.strictEqual(limiter.state().remainingInWindow, 0, 'no slots left after a refusal');
+  assert.strictEqual(limiter.state().rejections, 1, 'and it is counted');
+});
+
+test('the request after a refusal waits out the window', async () => {
+  const clock = fakeClock();
+  const limiter = rateLimit.createLimiter({ perMinute: 10, now: clock.now, sleep: clock.sleep });
+
+  limiter.exhausted();
+  await limiter.acquire();
+
+  assert.strictEqual(clock.slept.length, 1, 'it must wait rather than fire into a shut window');
+  assert.ok(clock.slept[0] > 0);
+});
+
+test('the window still rolls after a refusal rather than staying shut', async () => {
+  const clock = fakeClock();
+  const limiter = rateLimit.createLimiter({ perMinute: 10, now: clock.now, sleep: clock.sleep });
+
+  limiter.exhausted();
+  clock.advance(rateLimit.WINDOW_MS + 1);
+
+  await limiter.acquire();
+  assert.deepStrictEqual(clock.slept, [], 'a minute later the phantom stamps have aged out');
+});
