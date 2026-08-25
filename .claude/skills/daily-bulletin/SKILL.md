@@ -1,13 +1,16 @@
 ---
 name: daily-bulletin
-description: Use when producing the daily betting bulletin - grades yesterday's predictions, computes corner and goals baselines for upcoming fixtures, records judgments against them, and publishes the bulletin artifact
+description: Use when producing the daily betting bulletin - grades yesterday's predictions, prices every market family for upcoming fixtures, records judgments against them, and publishes the bulletin artifact
 ---
 
 # Daily Betting Bulletin
 
-Produce one day's bulletin across both market families, **corners** and
-**goals**. Follow these steps in order. The order matters: grading comes before
-analysis so today's bulletin opens with yesterday's result.
+Produce one day's bulletin across every market family this server builds — the
+totals (**corners**, **cards**, **goals**) and everything derived from the goal
+rates (**match result**, **double chance**, **both teams to score**, **clean
+sheets**, **odd/even**, **win to nil**). Follow these steps in order. The order
+matters: grading comes before analysis so today's bulletin opens with
+yesterday's result.
 
 Pass `dry-run` as an argument to execute every step WITHOUT calling
 `record_prediction` and WITHOUT publishing. Use it to validate a change to this
@@ -48,8 +51,12 @@ yesterday's. Note `settled`, `stillPending` and any `failures` for the bulletin.
 
 ## Step 3 — Read the record
 
-Call `get_ledger_summary` three times: once with no filter for the overall
-picture, then once per family with `market: "corners"` and `market: "goals"`.
+Call `get_ledger_summary` once with no filter, then once for each family that
+has anything settled. There are TEN families now, not two — `corners`, `goals`,
+`cards`, `matchResult`, `doubleChance`, `bothTeamsScore`, `oddEven`,
+`cleanSheetHome`, `cleanSheetAway`, `winToNil` — and one with nothing settled
+returns `n: 0`, which is a cheap way to find out which are worth asking about.
+
 Carry through, for each: agent Brier, baseline Brier, **`marketConsensus.brier`**,
 `verdict`, `verdictNote`, P&L in units, `n`, and the calibration bands.
 
@@ -86,21 +93,39 @@ For each entry in `leagues`, call `get_fixtures` with the league, season, and a
 date range covering the next `windowHours` hours. Collect every fixture not yet
 played.
 
-## Step 5 — Compute the baselines
+## Step 5 — Price every market, per fixture
 
-Two market families are built: **corners** and **goals**. For each fixture,
-call both `get_corner_baseline` and `get_goals_baseline` with `matchCount` from
-the configuration, and pass each family its own lines: `lines.corners` to the
-corner baseline, `lines.goals` to the goals one. The two sets are not
-interchangeable — 7.5 to 12.5 is meaningless for goals — so never pass one
-family's lines to the other's baseline.
+**One call per fixture: `get_fixture_board`.** It prices every family this
+server builds — the totals (corners, cards, goals) and everything derived from
+the goal rates (match result, double chance, both teams to score, both clean
+sheets, odd/even, win to nil) — against the market, and returns one row per
+selection with the model probability, the market consensus, the best price you
+can take and the edge between them, sorted with the interesting end first.
 
-**Order matters for cost.** Both families now read the same per-match
-statistics — corners for the corner count, goals for shots on target — so call
-`get_corner_baseline` FIRST. Finished matches are cached permanently, so the
-goals baseline that follows spends almost nothing on the same fixture. Called
-the other way round the total is the same; called on a fixture where you skip
-corners, the goals baseline pays the full per-match cost itself.
+Pass `matchCount` from the configuration. Do NOT pass `minEdge`: you are
+deciding, not filtering, and a selection the model dislikes is information too.
+
+**This replaces calling each family separately, and that is why it exists.**
+Ten families meant ten baseline calls and ten market calls per fixture — over a
+thousand across a night's card, which no run can make. So the procedure went on
+asking for corners and goals long after the other eight were built, and the
+ledger shows it: 34 predictions, every one of them corners or goals.
+
+The data was never the expensive part. The odds are one request per fixture and
+every totals profile reads the same cached statistics, so on a live fixture the
+first family took 213ms and each of the nine after it about 20. Ten families
+cost what two do.
+
+**A family that cannot be priced costs that family, not the fixture.** A
+promoted side with no history kills corners and leaves goals perfectly usable;
+a market none of your books quote is reported in `skipped` with the reason.
+Count those in the footer.
+
+**The derived families share the goals model, so they share its caveats.** 1X2,
+both teams to score and the rest are views of the same score matrix the goals
+total is priced from — built from two independent Poissons, which understates
+draws and low scores slightly. That bears hardest on the draw and on a 0-0, so
+weigh anything resting on those accordingly. `caveats` carries it.
 
 **Read `signal` on the goals baseline.** `"shots"` means the rate came from
 shots on target scaled by a pooled conversion — the intended path, and the less
@@ -114,7 +139,7 @@ underlying shot volume.
 Copy `signal` into `baseline.signal` when you record the prediction. It is what
 lets the two models be scored against each other later.
 
-Everything below about caveats and dispersion applies to both.
+Everything below about caveats and dispersion applies to every totals family.
 
 **Read the `caveats` array.** A baseline built on a fallback venue sample is
 weaker than one that was not, and that belongs in your `confidence`, which
@@ -127,16 +152,19 @@ trusting the parametric number silently.
 **Read `dispersion.ratio` per family, and expect different things of it.** Goal
 counts sit close to the Poisson assumption, so a goals ratio far from 1 is a
 warning. Corner counts are noisier by nature, so a corner ratio of 0.8 or 1.3
-is ordinary. The same number does not mean the same thing in both.
+is ordinary. Cards sit close to Poisson too, measured at 1.11 across 1089
+matches. The same number does not mean the same thing in all three.
 
 ## Step 6 — Read the market
 
-For each fixture, call `get_market_probabilities` once per family — with
-`market: "corners"` and again with `market: "goals"`. The tool reads only the
-full-match total; per-team, first-half and handicap variants are deliberately
-excluded because they are different bets. A family nobody quotes on this
-fixture cannot be bet: skip that family and count it as skipped. A line whose
-`consensus` is null is quoted on one side only — its best price is still real,
+The board from Step 5 already carries the market: consensus, best price and edge
+sit on every row. `get_market_probabilities` remains for looking at one family
+in detail — every bookmaker's price, the full de-vig — when a row is worth
+interrogating.
+
+Only the full-match market is read; per-team, first-half and handicap variants
+are deliberately excluded because they are different bets. A row whose
+`marketConsensus` is null is quoted on one side only — its best price is still real,
 but you have no market probability to test yourself against, so treat it as
 weaker evidence.
 
@@ -261,7 +289,10 @@ one stable link. History lives in the ledger, not in a trail of URLs.
 The page carries, in this order:
 
 1. If `verdict` is `baseline-better`, that finding, at the top, unmissable.
-2. Today's picks. Per pick: fixture and kickoff, **market family** and line,
+2. Today's picks. Per pick: fixture and kickoff, **market family** and line or
+   selection — with ten families in play a reader cannot check "over 2.5"
+   without knowing whether it is goals, corners or cards, and cannot check
+   "home" without knowing whether it is the match result or a clean sheet,
    baseline probability, empirical rate, market consensus, best price and
    bookmaker, YOUR probability, edge, stake, and **your divergence reason in
    full**. The reason must be visible — it is what makes the judgment
